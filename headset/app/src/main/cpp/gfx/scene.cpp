@@ -378,7 +378,6 @@ out vec4 oColor;
 void main() {
     vec3 g = ApplyCas2D(uTex, vUv, uInvTexSize, uSharpen);
     g = ColorGrade(g);
-    g = ApplyFoveaDebug(vec2(vUv.x, 1.0 - vUv.y), step(0.5, vUv.x), g);
     oColor = vec4(ToLayer(g), 1.0);
 }
 )";
@@ -417,7 +416,6 @@ void main() {
         ? ApplyCas2D(uTex, vec2(uv.x, 1.0 - uv.y), uInvTexSize, uSharpen)
         : texture(uTex, vec2(uv.x, 1.0 - uv.y)).rgb;
     g = ColorGrade(g);
-    g = ApplyFoveaDebug(vec2(vUv.x, 1.0 - vUv.y), step(0.5, vUv.x), g);
     oColor = vec4(ToLayer(g), 1.0);
 }
 )";

@@ -105,7 +105,16 @@ void VrStream::PlaceFovea(const float fovTan[2][4], float start[2][2]) {
 
     const float eyeW = m_config.eyeWidth > 0 ? float(m_config.eyeWidth) : 2048.0f;
     const float eyeH = m_config.eyeHeight > 0 ? float(m_config.eyeHeight) : 2048.0f;
+    const float encEyeW = m_config.foveatedEyeWidth > 0 ? float(m_config.foveatedEyeWidth) : eyeW;
+    const float encEyeH = m_config.foveatedEyeHeight > 0 ? float(m_config.foveatedEyeHeight) : eyeH;
     const float fSize = m_config.foveaSize;
+    const float oneMinusF = std::max(1e-4f, 1.0f - fSize);
+    const float densityX = std::clamp((encEyeW / eyeW - fSize) / oneMinusF, 1e-3f, 1.0f);
+    const float densityY = std::clamp((encEyeH / eyeH - fSize) / oneMinusF, 1e-3f, 1.0f);
+    // Ratio converting full-eye UV start `a` into encoded-frame pixel coordinate `e * encEye`:
+    // e = (a * s) / (F + (1 - F) * s), so encPx = a * (s / (F + (1 - F) * s)) * encEye.
+    const float uvToEncPxX = (densityX / (fSize + oneMinusF * densityX)) * encEyeW;
+    const float uvToEncPxY = (densityY / (fSize + oneMinusF * densityY)) * encEyeH;
 
     if (tracking) {
         m_recenterStartNs = 0;
@@ -121,19 +130,18 @@ void VrStream::PlaceFovea(const float fovTan[2][4], float start[2][2]) {
         // The eye's own gaze, or the other one's while it blinks.
         const int from = (g.flags & (1 << eye)) ? eye : (g.flags & (1 << (1 - eye))) ? 1 - eye : -1;
         if (fresh && from >= 0) {
-            float target[2] = {m_foveaStart[eye][0], m_foveaStart[eye][1]};
-            rc::FoveaSquare(fovTan[eye], g.gaze[from], fSize, m_foveaPlaced, target);
+            // Pure ray-to-UV projection (placed=false): One-Euro + CTU quantization handle smoothing/stability.
+            float target[2] = {};
+            rc::FoveaSquare(fovTan[eye], g.gaze[from], fSize, false, target);
             // One-Euro speed-adaptive filter: minCutoff 1.0 Hz (lock fixation noise), beta 0.5 (fast saccades)
             float filteredX = target[0], filteredY = target[1];
             m_foveaFilter[eye].Filter(target[0], target[1], now, 1.0f, 0.5f, 1.0f, filteredX, filteredY);
 
-            // Align foveaStart boundaries to 32px macroblock (CTU) grid
-            float pxX = filteredX * eyeW;
-            float pxY = filteredY * eyeH;
-            float alignedPxX = std::round(pxX / 32.0f) * 32.0f;
-            float alignedPxY = std::round(pxY / 32.0f) * 32.0f;
-            m_foveaStart[eye][0] = std::clamp(alignedPxX / eyeW, 0.0f, 1.0f - fSize);
-            m_foveaStart[eye][1] = std::clamp(alignedPxY / eyeH, 0.0f, 1.0f - fSize);
+            // Align the squeezed-frame fovea boundary to the 32px HEVC CTU grid
+            const float alignedX = (uvToEncPxX > 1.0f) ? (std::round(filteredX * uvToEncPxX / 32.0f) * 32.0f / uvToEncPxX) : filteredX;
+            const float alignedY = (uvToEncPxY > 1.0f) ? (std::round(filteredY * uvToEncPxY / 32.0f) * 32.0f / uvToEncPxY) : filteredY;
+            m_foveaStart[eye][0] = std::clamp(alignedX, 0.0f, 1.0f - fSize);
+            m_foveaStart[eye][1] = std::clamp(alignedY, 0.0f, 1.0f - fSize);
         } else if (holdGrace) {
             // Blink or brief tracking loss: hold fovea in place to prevent twitching/flicker.
         } else {
@@ -1054,9 +1062,9 @@ void VrStream::RunEncoder() {
             ec.profile = liveProfile;
             ec.tenBit = m_config.tenBit;
             ec.inputFormat = encFormat;
-            // Dual-track foveated encoding: Foveator geometric squeeze reduces edge pixels,
-            // while NVENC/AMF QP map simultaneously focuses encoder bit budget onto the fovea.
-            ec.foveated = m_config.foveated;
+            // Static lens-center QP map assumes an unsqueezed frame; keep it mutually exclusive
+            // with geometric foveation until Encoder::SetFoveation supports dynamic gaze rectangles.
+            ec.foveated = m_config.foveated && !job.foveated;
             ec.adaptiveQuant = m_config.adaptiveQuant;
             ec.twoPass = m_config.twoPass;
             ec.sliceCount = (m_config.sliceCount > 1 && ec.bitrateKbps >= 40000) ? m_config.sliceCount : 1;
@@ -1106,7 +1114,7 @@ void VrStream::RunEncoder() {
             encoder->SetBitrate(encoderKbps);
             appliedKbps = encoderKbps;
         }
-        if (m_config.foveated) encoder->SetFoveation(job.fovTan);
+        if (m_config.foveated && !job.foveated) encoder->SetFoveation(job.fovTan);
         const bool keyframe = m_sender.BeginFrame(*encoder);
         const int64_t encStart = rc::NowNs();
         if (!encoder->Encode(job.yuv.Get(), keyframe, out)) {
