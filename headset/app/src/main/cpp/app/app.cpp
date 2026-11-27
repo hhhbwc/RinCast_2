@@ -137,6 +137,8 @@ void App::Run() {
 void App::Init() {
     Platform::Init(m_android);
     m_settingsPath = Platform::FilesDir() + "/settings.json";
+    std::error_code firstRunEc;
+    const bool firstRun = !std::filesystem::exists(m_settingsPath, firstRunEc);
     m_settings = HeadsetSettings::Load(m_settingsPath);
     m_xr.SetCompatPlainOpenXr(m_settings.compatPlainOpenXr);
     VideoDecoder::SetCompatPlain(m_settings.compatPlainOpenXr);
@@ -157,6 +159,52 @@ void App::Init() {
         return;
     }
     RC_LOGI("Headset family: %s", m_headset->Family());
+    if (firstRun) {
+        const char* rawRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        std::string renderer = rawRenderer ? rawRenderer : "";
+        std::string rLow = renderer;
+        std::transform(rLow.begin(), rLow.end(), rLow.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        std::string platform = SystemProperty("ro.board.platform");
+        std::transform(platform.begin(), platform.end(), platform.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        const auto hasR = [&](const char* s) { return rLow.find(s) != std::string::npos; };
+        const auto hasP = [&](const char* s) { return platform.find(s) != std::string::npos; };
+        const bool lowGpu = hasR("adreno (tm) 5") || hasR("adreno 5") ||
+                            hasR("adreno (tm) 61") || hasR("adreno 61") ||
+                            hasR("adreno (tm) 62") || hasR("adreno 62") ||
+                            hasR("adreno (tm) 63") || hasR("adreno 63") ||
+                            hasR("adreno (tm) 64") || hasR("adreno 64") ||
+                            hasR("mali-g5") || hasR("mali-g72") || hasR("mali-g76") || hasR("mali-t") ||
+                            hasR("powervr") || hasR("swiftshader") ||
+                            hasP("msm8998") || hasP("sdm845") || hasP("sda845") ||
+                            hasP("rk35") || hasP("mt67");
+        const bool highGpu = hasR("adreno (tm) 73") || hasR("adreno (tm) 74") || hasR("adreno (tm) 75") ||
+                             hasR("adreno (tm) 76") || hasR("adreno (tm) 8") ||
+                             hasR("adreno 73") || hasR("adreno 74") || hasR("adreno 75") || hasR("adreno 8") ||
+                             hasR("immortalis-g7") || hasR("immortalis-g9");
+        const char* tier = "mid";
+        if (lowGpu) {
+            tier = "low";
+            m_settings.SetVrScale(0.6f);
+            m_settings.vrSharpen = 0.0f;
+            m_settings.upscaling = false;
+            m_settings.frameGeneration = false;
+            m_settings.refreshRate = 72.f;
+            m_settings.vrBitrateMbps = 60;
+        } else if (highGpu) {
+            tier = "high";
+            m_settings.SetVrScale(0.9f);
+            m_settings.vrSharpen = 0.45f;
+            m_settings.refreshRate = 90.f;
+        } else {
+            m_settings.SetVrScale(0.75f);
+            m_settings.vrSharpen = 0.35f;
+            m_settings.refreshRate = 72.f;
+        }
+        RC_LOGI("First-run hardware tier: %s (renderer='%s', platform='%s') -> scale=%.2f sharpen=%.2f fps=%.0f bitrate=%d",
+                tier, renderer.c_str(), platform.c_str(), m_settings.vrScale, m_settings.vrSharpen,
+                m_settings.refreshRate, m_settings.vrBitrateMbps);
+        SaveSettings();
+    }
     // The resolution used to count from the runtime's recommended size; it counts from the
     // panel now. The same pixels as before, at the new percentage.
     if (!m_settings.vrScaleOfPanel) {

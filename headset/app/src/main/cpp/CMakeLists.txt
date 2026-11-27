@@ -48,6 +48,7 @@ add_library(rincast SHARED
   headsets/pico/pico_body.cpp
   headsets/pico/pico_face.cpp
   headsets/androidxr/androidxr_headset.cpp
+  headsets/htc/htc_headset.cpp
   stb_impl.cpp
 )
 # VERSION is the single source of the version, as for the PC side.

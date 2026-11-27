@@ -42,6 +42,8 @@ std::vector<const char*> Headset::Extensions() {
         // HTC Vive
         XR_HTC_VIVE_FOCUS3_CONTROLLER_INTERACTION_EXTENSION_NAME,
         XR_HTC_HAND_INTERACTION_EXTENSION_NAME,
+        // Play For Dream / YVR
+        "XR_YVR_controller_interaction",
         // Android XR
         kAndroidXrMarkerExtension,
         // Any: where the eyes look, for foveated encoding
@@ -58,6 +60,8 @@ std::vector<ControllerProfile> Headset::Controllers() const {
         {"/interaction_profiles/bytedance/pico4_controller", XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME, false, true},
         {"/interaction_profiles/bytedance/pico_neo3_controller", XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME, false, true},
         {"/interaction_profiles/htc/vive_focus3_controller", XR_HTC_VIVE_FOCUS3_CONTROLLER_INTERACTION_EXTENSION_NAME, false, true},
+        {"/interaction_profiles/yvr/touch_controller_yvr", "XR_YVR_controller_interaction", false, true},
+        {"/interaction_profiles/htc/vive_controller", nullptr, false, true},
         {"/interaction_profiles/valve/index_controller", nullptr, false, true},
         {"/interaction_profiles/microsoft/motion_controller", nullptr, false, false},
     };
@@ -74,6 +78,7 @@ std::unique_ptr<Headset> Headset::Create(XrContext& xr) {
     if (has("oculus") || has("meta")) return CreateQuestHeadset();
     if (has("pico") || has("bytedance") || xr.HasExtension(XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME)) return CreatePicoHeadset(xr);
     if (has("android") || xr.HasExtension(kAndroidXrMarkerExtension)) return CreateAndroidXrHeadset();
+    if (has("htc") || has("vive") || xr.HasExtension(XR_HTC_VIVE_FOCUS3_CONTROLLER_INTERACTION_EXTENSION_NAME)) return CreateHtcHeadset();
     RC_LOGI("Unknown OpenXR runtime \"%s\": plain OpenXR only", xr.RuntimeName().c_str());
     return std::make_unique<Headset>();
 }

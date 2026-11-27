@@ -88,6 +88,12 @@ class MicCapture {
     int64_t m_lastRestartNs = 0;
     std::atomic<bool> m_muted{false};
     std::atomic<float> m_gain{1.f};
+    // Voice cleanup: 80 Hz high-pass filter + adaptive soft-knee noise gate.
+    float m_hpfPrevIn = 0.f;
+    float m_hpfPrevOut = 0.f;
+    float m_noiseFloor = 0.004f;  // ~ -48 dBFS initial estimate
+    float m_gateGain = 1.f;
+    int m_gateHoldFrames = 0;
 };
 
 }  // namespace rv

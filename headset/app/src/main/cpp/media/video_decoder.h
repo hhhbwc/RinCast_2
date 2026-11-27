@@ -146,6 +146,9 @@ class VideoDecoder {
     AImageReader* m_reader = nullptr;
     ANativeWindow* m_window = nullptr;
     int m_readerMaxImages = 8;
+    int m_consecutiveInputStalls = 0;
+    std::atomic<int64_t> m_lastInputQueuedNs{0};
+    std::atomic<int64_t> m_lastOutputDecodedNs{0};
 #else
     // V4L2: OUTPUT buffers carry the bitstream in, CAPTURE buffers the pictures out. Each picture
     // buffer is exported as a dmabuf and imported into EGL once (per-frame imports crash the

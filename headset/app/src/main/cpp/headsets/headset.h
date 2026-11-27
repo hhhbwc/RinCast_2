@@ -94,6 +94,7 @@ std::string SystemProperty(const char* name);
 std::unique_ptr<Headset> CreateQuestHeadset();
 std::unique_ptr<Headset> CreatePicoHeadset(XrContext& xr);
 std::unique_ptr<Headset> CreateAndroidXrHeadset();
+std::unique_ptr<Headset> CreateHtcHeadset();
 // Enabled where the runtime has it, to recognize Android XR (Samsung Galaxy XR).
 inline constexpr const char* kAndroidXrMarkerExtension = "XR_ANDROID_unbounded_reference_space";
 

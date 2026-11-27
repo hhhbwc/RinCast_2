@@ -229,10 +229,21 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
 
         std::string compLower = compName;
         std::transform(compLower.begin(), compLower.end(), compLower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        char boardProp[PROP_VALUE_MAX] = {};
+        __system_property_get("ro.board.platform", boardProp);
+        std::string boardLower = boardProp;
+        std::transform(boardLower.begin(), boardLower.end(), boardLower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         const bool isQualcomm = (compLower.find("qti") != std::string::npos || compLower.find("qcom") != std::string::npos);
+        const bool isMediatek = (compLower.find("mtk") != std::string::npos || compLower.find("mediatek") != std::string::npos ||
+                                 boardLower.rfind("mt", 0) == 0);
+        const bool isRockchip = (compLower.find("rk.") != std::string::npos || compLower.find("rockchip") != std::string::npos ||
+                                 boardLower.rfind("rk", 0) == 0);
+        const bool isLegacyOmx = (compLower.rfind("omx.", 0) == 0);
+        const bool isSoftware = (compLower.rfind("c2.android.", 0) == 0 || compLower.rfind("omx.google.", 0) == 0);
 
-        RC_LOGI("Decoder component: %s (attempt: %s, qualcomm: %d)",
-                compName.c_str(), safeFallback ? "safe-fallback" : "optimized", isQualcomm);
+        RC_LOGI("Decoder component: %s (attempt: %s, board: %s, qcom:%d mtk:%d rk:%d omx:%d sw:%d)",
+                compName.c_str(), safeFallback ? "safe-fallback" : "optimized", boardLower.c_str(),
+                isQualcomm, isMediatek, isRockchip, isLegacyOmx, isSoftware);
 
         AMediaFormat* fmt = AMediaFormat_new();
         if (!fmt) {
@@ -251,13 +262,17 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
             const int64_t rawInputSize = static_cast<int64_t>(m_width) * m_height / 4;
             const int32_t clampedInputSize = static_cast<int32_t>(std::clamp<int64_t>(rawInputSize, 1024 * 1024, 8 * 1024 * 1024));
             AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, clampedInputSize);
-            // Latency over everything else.
-            AMediaFormat_setInt32(fmt, "low-latency", 1);
+            // Latency over everything else, filtered by SoC/component quirks to avoid
+            // configure rejections or frame-order stalls on legacy OMX / Rockchip / MTK decoders.
             AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_PRIORITY, 0);
             AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_FRAME_RATE, int32_t(m_fps + 0.5f));
-            AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_OPERATING_RATE, int32_t(m_fps * 2 + 0.5f));
+            if (!isLegacyOmx && !isRockchip && !isSoftware) {
+                AMediaFormat_setInt32(fmt, "low-latency", 1);
+                const float opRateMul = isMediatek ? 1.0f : 2.0f;
+                AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_OPERATING_RATE, int32_t(m_fps * opRateMul + 0.5f));
+            }
 
-            if (isQualcomm && !s_compatPlain) {
+            if (isQualcomm && !isLegacyOmx && !s_compatPlain) {
                 AMediaFormat_setInt32(fmt, "vendor.qti-ext-dec-low-latency.enable", 1);
                 AMediaFormat_setInt32(fmt, "vendor.qti-ext-dec-picture-order.enable", 1);
                 AMediaFormat_setInt32(fmt, "vendor.qti-ext-dec-info-misr.disable", 1);
@@ -306,6 +321,10 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
         m_failed = true;
         return false;
     }
+    m_consecutiveInputStalls = 0;
+    const int64_t startNs = rc::NowNs();
+    m_lastInputQueuedNs.store(0, std::memory_order_relaxed);
+    m_lastOutputDecodedNs.store(startNs, std::memory_order_relaxed);
     m_configured = true;
     m_failed = false;  // a later keyframe got it going after all
     m_outputThread = std::thread([this] { OutputLoop(); });
@@ -343,10 +362,16 @@ void VideoDecoder::InputLoop() {
             break;
         }
         if (index < 0) {
+            m_consecutiveInputStalls++;
             Warn("no free input buffer for 100 ms, the decoder is falling behind",
-                 rc::StrFormat("status=%lld frame=%u data=%zu attempts=50 timeoutMs=100", static_cast<long long>(index),
-                               p.frameIndex, p.data.size())
+                 rc::StrFormat("status=%lld frame=%u data=%zu attempts=50 timeoutMs=100 stalls=%d",
+                               static_cast<long long>(index), p.frameIndex, p.data.size(), m_consecutiveInputStalls)
                      .c_str());
+            if (m_consecutiveInputStalls >= 15) {
+                Fail("decoder stalled (consecutive input timeouts)",
+                     rc::StrFormat("stalls=%d frame=%u", m_consecutiveInputStalls, p.frameIndex).c_str());
+                break;
+            }
             // This frame never reaches the decoder, so the chain breaks here.
             std::lock_guard lock(m_mutex);
             m_queue.clear();
@@ -385,9 +410,12 @@ void VideoDecoder::InputLoop() {
                      .c_str());
             break;
         }
+        m_consecutiveInputStalls = 0;
+        const int64_t queuedNs = rc::NowNs();
+        m_lastInputQueuedNs.store(queuedNs, std::memory_order_relaxed);
         {
             std::lock_guard lock(m_statsMutex);
-            m_inputTimes[int64_t(p.frameIndex)] = rc::NowNs();
+            m_inputTimes[int64_t(p.frameIndex)] = queuedNs;
             while (m_inputTimes.size() > 64) m_inputTimes.erase(m_inputTimes.begin());
         }
         m_lastQueued = p.frameIndex;
@@ -401,6 +429,7 @@ void VideoDecoder::OutputLoop() {
         const ssize_t index = AMediaCodec_dequeueOutputBuffer(m_codecHandle, &info, 10000);
         if (index >= 0) {
             const int64_t now = rc::NowNs();
+            m_lastOutputDecodedNs.store(now, std::memory_order_relaxed);
             double frameDecodeMs = -1;
             {
                 std::lock_guard lock(m_statsMutex);
@@ -446,7 +475,16 @@ void VideoDecoder::OutputLoop() {
                 RC_LOGI("Decoder output format: %s", formatText ? formatText : "?");
                 AMediaFormat_delete(f);
             }
-        } else if (index != AMEDIACODEC_INFO_TRY_AGAIN_LATER && index != AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) {
+        } else if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
+            const int64_t now = rc::NowNs();
+            const int64_t lastIn = m_lastInputQueuedNs.load(std::memory_order_relaxed);
+            const int64_t lastOut = m_lastOutputDecodedNs.load(std::memory_order_relaxed);
+            if (lastIn > 0 && lastOut > 0 && (now - lastIn) < 500'000'000LL && (now - lastOut) > 2'000'000'000LL) {
+                Fail("decoder stalled (no output frames for 2s)",
+                     rc::StrFormat("queuedFrame=%u decoded=%u", m_lastQueued.load(), m_decoded.load()).c_str());
+                break;
+            }
+        } else if (index != AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) {
             Fail("dequeueOutputBuffer returned an error",
                  rc::StrFormat("status=%lld queuedFrame=%u", static_cast<long long>(index), m_lastQueued.load()).c_str());
             break;

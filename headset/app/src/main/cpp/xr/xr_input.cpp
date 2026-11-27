@@ -81,6 +81,7 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
         if (profile.extension && !xr.HasExtension(profile.extension)) continue;
         const bool isWmr = strstr(profile.path, "motion_controller") != nullptr;
         const bool isIndex = strstr(profile.path, "index_controller") != nullptr;
+        const bool isViveWand = strcmp(profile.path, "/interaction_profiles/htc/vive_controller") == 0;
         auto buildBindings = [&](bool withTouch, bool withThumbrest) {
             std::vector<XrActionSuggestedBinding> b;
             auto bind = [&](XrAction a, const char* path) { b.push_back({a, Path(inst, path)}); };
@@ -89,18 +90,24 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
                 bind(m_aimPose, (h + "/input/aim/pose").c_str());
                 bind(m_gripPose, (h + "/input/grip/pose").c_str());
                 bind(m_trigger, (h + "/input/trigger/value").c_str());
-                if (isWmr) bind(m_squeeze, (h + "/input/squeeze/click").c_str());
+                if (isWmr || isViveWand) bind(m_squeeze, (h + "/input/squeeze/click").c_str());
                 else bind(m_squeeze, (h + "/input/squeeze/value").c_str());
-                bind(m_stick, (h + "/input/thumbstick").c_str());
-                bind(m_stickClick, (h + "/input/thumbstick/click").c_str());
-                if (withTouch) {
-                    bind(m_touchStick, (h + "/input/thumbstick/touch").c_str());
-                    bind(m_touchTrigger, (h + "/input/trigger/touch").c_str());
+                if (isViveWand) {
+                    bind(m_stick, (h + "/input/trackpad").c_str());
+                    bind(m_stickClick, (h + "/input/trackpad/click").c_str());
+                    if (withTouch) bind(m_touchStick, (h + "/input/trackpad/touch").c_str());
+                } else {
+                    bind(m_stick, (h + "/input/thumbstick").c_str());
+                    bind(m_stickClick, (h + "/input/thumbstick/click").c_str());
+                    if (withTouch) {
+                        bind(m_touchStick, (h + "/input/thumbstick/touch").c_str());
+                        bind(m_touchTrigger, (h + "/input/trigger/touch").c_str());
+                    }
                 }
                 if (withThumbrest) bind(m_touchThumbrest, (h + "/input/thumbrest/touch").c_str());
                 bind(m_haptic, (h + "/output/haptic").c_str());
             }
-            if (isWmr) {
+            if (isWmr || isViveWand) {
                 bind(m_menu, "/user/hand/left/input/menu/click");
                 bind(m_menu, "/user/hand/right/input/menu/click");
             } else if (isIndex) {
@@ -155,18 +162,31 @@ bool XrInput::Init(XrContext& xr, const std::vector<ControllerProfile>& profiles
         }
     }
 
-    // Hand tracking via the Khronos simple profile (aim pose + select = pinch).
-    std::vector<XrActionSuggestedBinding> hb;
-    for (const char* side : {"left", "right"}) {
-        const std::string h = std::string("/user/hand/") + side;
-        hb.push_back({m_aimPose, Path(inst, (h + "/input/aim/pose").c_str())});
-        hb.push_back({m_gripPose, Path(inst, (h + "/input/grip/pose").c_str())});
-        hb.push_back({m_trigger, Path(inst, (h + "/input/select/click").c_str())});
-    }
+    // Hand tracking and universal fallback for minimal/niche OpenXR runtimes via khr/simple_controller.
+    auto buildSimpleBindings = [&](bool withMenuAndHaptic) {
+        std::vector<XrActionSuggestedBinding> hb;
+        for (const char* side : {"left", "right"}) {
+            const std::string h = std::string("/user/hand/") + side;
+            hb.push_back({m_aimPose, Path(inst, (h + "/input/aim/pose").c_str())});
+            hb.push_back({m_gripPose, Path(inst, (h + "/input/grip/pose").c_str())});
+            hb.push_back({m_trigger, Path(inst, (h + "/input/select/click").c_str())});
+            if (withMenuAndHaptic) {
+                hb.push_back({m_menu, Path(inst, (h + "/input/menu/click").c_str())});
+                hb.push_back({m_haptic, Path(inst, (h + "/output/haptic").c_str())});
+            }
+        }
+        return hb;
+    };
     sb.interactionProfile = Path(inst, "/interaction_profiles/khr/simple_controller");
+    auto hb = buildSimpleBindings(true);
     sb.suggestedBindings = hb.data();
     sb.countSuggestedBindings = uint32_t(hb.size());
-    xrSuggestInteractionProfileBindings(inst, &sb);
+    if (XR_FAILED(xrSuggestInteractionProfileBindings(inst, &sb))) {
+        hb = buildSimpleBindings(false);
+        sb.suggestedBindings = hb.data();
+        sb.countSuggestedBindings = uint32_t(hb.size());
+        xrSuggestInteractionProfileBindings(inst, &sb);
+    }
 
     XrSessionActionSetsAttachInfo ai{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     ai.countActionSets = 1;

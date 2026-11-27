@@ -1,6 +1,7 @@
 #include "audio.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #ifndef __ANDROID__
@@ -242,6 +243,11 @@ bool MicCapture::Start(PacketSink sink) {
     m_float = AAudioStream_getFormat(m_stream) == AAUDIO_FORMAT_PCM_FLOAT;
     m_resamplePos = 0;
     m_prevSample = 0;
+    m_hpfPrevIn = 0.f;
+    m_hpfPrevOut = 0.f;
+    m_noiseFloor = 0.004f;
+    m_gateGain = 1.f;
+    m_gateHoldFrames = 0;
     RC_LOGI("Microphone: %d Hz, %d channel(s), %s%s", m_rate, m_channels, m_float ? "float" : "16-bit",
             m_rate != int(rc::kAudioSampleRate) || m_channels != 1 || m_float ? ", converting to 48 kHz mono 16-bit" : "");
     const aaudio_result_t startRes = AAudioStream_requestStart(m_stream);
@@ -357,9 +363,49 @@ void MicCapture::OnSamples(const void* audio, int32_t frames) {
     constexpr int kFrame = 480;  // 10 ms
     uint8_t packet[sizeof(rc::AudioPacketHeader) + 1000];
     while (m_pending.size() >= size_t(kFrame)) {
-        if (const float gain = m_gain; gain != 1.f)
-            for (int i = 0; i < kFrame; i++)
-                m_pending[size_t(i)] = int16_t(std::clamp(int(m_pending[size_t(i)] * gain), -32768, 32767));
+        // 1) 80 Hz 1-pole high-pass filter removes DC offset, breath pops, and fan rumble.
+        // 2) Adaptive noise-floor soft-knee gate suppresses speaker bleed and steady hiss.
+        constexpr float kHpfAlpha = 0.9896f;  // 80 Hz @ 48 kHz
+        double sumSq = 0.0;
+        float filtered[kFrame];
+        for (int i = 0; i < kFrame; i++) {
+            const float x = float(m_pending[size_t(i)]) * (1.f / 32768.f);
+            const float y = kHpfAlpha * (m_hpfPrevOut + x - m_hpfPrevIn);
+            m_hpfPrevIn = x;
+            m_hpfPrevOut = y;
+            filtered[i] = y;
+            sumSq += double(y) * double(y);
+        }
+        const float rms = std::sqrt(float(sumSq / kFrame));
+        // Track background floor: drop quickly when quieter, creep up slowly only in quiet frames.
+        if (rms < m_noiseFloor) {
+            m_noiseFloor = m_noiseFloor * 0.90f + rms * 0.10f;
+        } else if (rms < m_noiseFloor * 2.2f) {
+            m_noiseFloor = m_noiseFloor * 0.995f + rms * 0.005f;
+        }
+        m_noiseFloor = std::clamp(m_noiseFloor, 0.0012f, 0.025f);  // -58 dBFS .. -32 dBFS
+        const float openThresh = std::max(0.006f, m_noiseFloor * 2.4f);
+        const float closeThresh = openThresh * 0.7f;
+        float targetGate = 0.06f;  // -24 dB soft floor avoids abrupt dead-air pumping
+        if (rms >= openThresh) {
+            m_gateHoldFrames = 18;  // 180 ms hold protects word endings
+            targetGate = 1.f;
+        } else if (m_gateHoldFrames > 0) {
+            m_gateHoldFrames--;
+            targetGate = 1.f;
+        } else if (rms > closeThresh) {
+            const float t = (rms - closeThresh) / std::max(1e-5f, openThresh - closeThresh);
+            targetGate = 0.06f + 0.94f * t;
+        }
+        const float userGain = m_gain.load();
+        const float smoothCoeff = targetGate > m_gateGain ? 0.55f : 0.15f;  // fast attack, smooth release
+        for (int i = 0; i < kFrame; i++) {
+            // Per-sample linear ramp across the 10 ms frame prevents clicks.
+            const float g = m_gateGain + (targetGate - m_gateGain) * smoothCoeff * (float(i + 1) / kFrame);
+            const float out = filtered[i] * g * userGain * 32767.f;
+            m_pending[size_t(i)] = int16_t(std::clamp(int(std::lrintf(out)), -32768, 32767));
+        }
+        m_gateGain += (targetGate - m_gateGain) * smoothCoeff;
         rc::AudioPacketHeader h{};
         h.stream = uint8_t(rc::AudioStream::MicToPc);
         h.channels = 1;
