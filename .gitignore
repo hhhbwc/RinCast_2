@@ -44,3 +44,4 @@ server/deploy/keyhelp-apache-directives.conf
 
 # Converts a paid third-party asset pack; not part of the public source
 tools/build-sky-assets.mjs
+tools/diagnostics/out/
