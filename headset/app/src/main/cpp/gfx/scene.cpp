@@ -274,6 +274,58 @@ void main() {
     oColor = vec4(ToLayer(g), 1.0);
 }
 )";
+// Single-pass fused Fovea Unwarp + Fovea-only edge-adaptive upscaling directly on OES.
+// Avoids the intermediate KeepVideo FBO write/read and never sharpens stretched periphery.
+static const char* kBlitExtGsrFs = R"(
+uniform samplerExternalOES uTex;
+uniform vec4 uCrop;
+uniform vec2 uInvTexSize;
+in vec2 vUv;
+out vec4 oColor;
+float gsrLuma(vec3 c) { return c.g; }
+void main() {
+    vec2 fullUv = vec2(vUv.x, 1.0 - vUv.y);
+    float eye = step(0.5, fullUv.x);
+    vec2 uv = Foveate(fullUv, eye);
+    vec2 sampleUv = uCrop.xy + uv * uCrop.zw;
+    vec3 col = texture(uTex, sampleUv).rgb;
+    float foveaWeight = 1.0;
+    vec2 clampLo = uCrop.xy + vec2(eye * 0.5, 0.0) * uCrop.zw;
+    vec2 clampHi = uCrop.xy + vec2(eye * 0.5 + 0.5, 1.0) * uCrop.zw;
+    if (uFoveated != 0) {
+        vec2 a = eye < 0.5 ? uFoveaStart.xy : uFoveaStart.zw;
+        float F = uFoveaLayout.x;
+        vec2 p = vec2(fullUv.x * 2.0 - eye, fullUv.y);
+        vec2 dIn = min(p - a, (a + vec2(F)) - p);
+        foveaWeight = smoothstep(0.0, 0.015, min(dIn.x, dIn.y));
+        vec2 eLo = Foveate(vec2((a.x + eye) * 0.5, a.y), eye);
+        vec2 eHi = Foveate(vec2((a.x + F + eye) * 0.5, a.y + F), eye);
+        clampLo = uCrop.xy + eLo * uCrop.zw;
+        clampHi = uCrop.xy + eHi * uCrop.zw;
+    }
+    if (foveaWeight > 0.001 && uInvTexSize.x > 0.0 && uInvTexSize.y > 0.0) {
+        vec2 stepUv = uInvTexSize * uCrop.zw;
+        float c = gsrLuma(col);
+        float n = gsrLuma(texture(uTex, clamp(sampleUv + vec2(0.0, -stepUv.y), clampLo, clampHi)).rgb);
+        float s = gsrLuma(texture(uTex, clamp(sampleUv + vec2(0.0,  stepUv.y), clampLo, clampHi)).rgb);
+        float w = gsrLuma(texture(uTex, clamp(sampleUv + vec2(-stepUv.x, 0.0), clampLo, clampHi)).rgb);
+        float e = gsrLuma(texture(uTex, clamp(sampleUv + vec2( stepUv.x, 0.0), clampLo, clampHi)).rgb);
+        float edge = abs(n - s) + abs(w - e);
+        if (edge > 8.0 / 255.0) {
+            float mn = min(c, min(min(n, s), min(w, e)));
+            float mx = max(c, max(max(n, s), max(w, e)));
+            float avg = (n + s + w + e) * 0.25;
+            float detail = (c - avg) * 1.15;
+            float boosted = clamp(c + detail, mn, mx);
+            float deltaY = clamp(boosted - c, -23.0 / 255.0, 23.0 / 255.0) * foveaWeight;
+            col = clamp(col + deltaY, 0.0, 1.0);
+        }
+    }
+    col = ColorGrade(col);
+    col = ApplyFoveaDebug(fullUv, eye, col);
+    oColor = vec4(ToLayer(col), 1.0);
+}
+)";
 // The video as it is, gamma-encoded: the upscaler's input. External textures can't be gathered.
 static const char* kBlitExtGammaFs = R"(
 uniform samplerExternalOES uTex;
@@ -297,6 +349,9 @@ void main() {
 static const char* kGsrFs = R"(
 precision mediump float;
 uniform highp vec4 uViewport;  // 1/width, 1/height, width, height
+uniform int uFoveated;
+uniform vec4 uFoveaStart;
+uniform float uFoveaSize;
 uniform mediump sampler2D uTex;
 in highp vec2 vUv;
 out vec4 oColor;
@@ -334,9 +389,18 @@ void main() {
     highp vec2 coord = imgCoordPixel * uViewport.xy;
     vec2 pl = imgCoord - imgCoordPixel;
     float eye = step(0.5, vUv.x);
-    vec4 left = GatherEye(coord, eye);
+    // Skip GSR sharpening outside the full-density fovea to prevent amplifying peripheral
+    // bilinear stretch artifacts and save ~60% fragment ALU.
+    float foveaWeight = 1.0;
+    if (uFoveated != 0) {
+        vec2 a = eye < 0.5 ? uFoveaStart.xy : uFoveaStart.zw;
+        vec2 p = vec2(vUv.x * 2.0 - eye, 1.0 - vUv.y);
+        vec2 dIn = min(p - a, (a + vec2(uFoveaSize)) - p);
+        foveaWeight = smoothstep(0.0, 0.015, min(dIn.x, dIn.y));
+    }
+    vec4 left = foveaWeight > 0.001 ? GatherEye(coord, eye) : vec4(color[mode]);
     float edgeVote = abs(left.z - left.y) + abs(color[mode] - left.y) + abs(color[mode] - left.z);
-    if (edgeVote > edgeThreshold) {
+    if (foveaWeight > 0.001 && edgeVote > edgeThreshold) {
         coord.x += uViewport.x;
         vec4 right = GatherEye(coord + vec2(uViewport.x, 0.0), eye);
         vec4 upDown;
@@ -366,7 +430,7 @@ void main() {
         float maxY = max(max(left.y, left.z), max(right.x, right.w));
         float minY = min(min(left.y, left.z), min(right.x, right.w));
         finalY = clamp(edgeSharpness * finalY, minY, maxY);
-        float deltaY = clamp(finalY - color.w, -23.0 / 255.0, 23.0 / 255.0);
+        float deltaY = clamp(finalY - color.w, -23.0 / 255.0, 23.0 / 255.0) * foveaWeight;
         color.xyz = clamp(color.xyz + deltaY, 0.0, 1.0);
     }
     highp vec3 g = ColorGrade(color.xyz);
@@ -531,6 +595,7 @@ bool SceneRenderer::Init(bool srgbSwapchain) {
     // Optional: without it, upscaling just stays off.
     m_upscalerReady = m_blitExtGamma.Build(kBlitVs, blitExtGamma.c_str(), "blitExtGamma");
     m_upscalerReady = m_gsr.Build(kBlitVs, (toLayer + kColorGradeFs + kGsrFs).c_str(), "gsr") && m_upscalerReady;
+    m_blitExtGsrReady = m_blitExtGsr.Build(kBlitVs, (ext + toLayer + kColorGradeFs + kFoveateFs + kBlitExtGsrFs).c_str(), "blitExtGsr");
     m_upscalerReady = m_kept.Build(kBlitVs, (toLayer + kColorGradeFs + kCas2DFs + kKeptFs).c_str(), "kept") && m_upscalerReady;
     m_upscalerReady = m_keptMoved.Build(kBlitVs, (toLayer + kColorGradeFs + kCas2DFs + kKeptMovedFs).c_str(), "keptMoved") && m_upscalerReady;
     m_externalMovedReady = m_externalMoved.Build(kBlitVs, (ext + toLayer + kColorGradeFs + kCasExtFs + kFoveateFs + kExternalMovedFs).c_str(), "externalMoved");
@@ -688,7 +753,34 @@ void SceneRenderer::BlitExternal(GLuint dstFbo, GLuint texture, int width, int h
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
+void SceneRenderer::BlitExternalUpscaled(GLuint dstFbo, GLuint texture, int dstW, int dstH, const float* crop,
+                                         int srcW, int srcH, const VideoFoveation* foveation) {
+    static const float kFull[4] = {0, 0, 1, 1};
+    glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
+    glViewport(0, 0, dstW, dstH);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    DiscardTarget();
+    RawSrgbWrites raw(m_rawSrgbWrites);
+    m_blitExtGsr.Use();
+    glUniform4f(m_blitExtGsr.Uniform("uRect"), 0, 0, 1, 1);
+    glUniform4fv(m_blitExtGsr.Uniform("uCrop"), 1, crop ? crop : kFull);
+    SetFoveation(m_blitExtGsr, foveation, m_foveaDebug);
+    const float tw = srcW > 0 ? float(srcW) : float(dstW);
+    const float th = srcH > 0 ? float(srcH) : float(dstH);
+    glUniform2f(m_blitExtGsr.Uniform("uInvTexSize"), tw > 0 ? 1.0f / tw : 0.0f, th > 0 ? 1.0f / th : 0.0f);
+    glUniform1f(m_blitExtGsr.Uniform("uVibrance"), m_vrVibrance);
+    glUniform1f(m_blitExtGsr.Uniform("uDarkGamma"), m_vrDarkGamma);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture);
+    glUniform1i(m_blitExtGsr.Uniform("uTex"), 0);
+    glBindVertexArray(EmptyVao());
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
 void SceneRenderer::KeepVideo(GLuint texture, const float* crop, int width, int height, const VideoFoveation* foveation) {
+    m_keptFoveated = foveation != nullptr;
+    if (foveation) m_keptFoveation = *foveation;
     static const float kFull[4] = {0, 0, 1, 1};
     if (rc::NeedsTextureResize(m_gsrWidth, m_gsrHeight, width, height)) {
         if (m_gsrFbo) glDeleteFramebuffers(1, &m_gsrFbo);
@@ -732,6 +824,12 @@ void SceneRenderer::DrawKeptUpscaled(GLuint dstFbo, int dstW, int dstH) {
     m_gsr.Use();
     glUniform4f(m_gsr.Uniform("uRect"), 0, 0, 1, 1);
     glUniform4f(m_gsr.Uniform("uViewport"), 1.f / m_gsrWidth, 1.f / m_gsrHeight, float(m_gsrWidth), float(m_gsrHeight));
+    glUniform1i(m_gsr.Uniform("uFoveated"), m_keptFoveated ? 1 : 0);
+    if (m_keptFoveated) {
+        glUniform4f(m_gsr.Uniform("uFoveaStart"), m_keptFoveation.start[0][0], m_keptFoveation.start[0][1],
+                    m_keptFoveation.start[1][0], m_keptFoveation.start[1][1]);
+        glUniform1f(m_gsr.Uniform("uFoveaSize"), m_keptFoveation.size);
+    }
     glUniform1f(m_gsr.Uniform("uVibrance"), m_vrVibrance);
     glUniform1f(m_gsr.Uniform("uDarkGamma"), m_vrDarkGamma);
     glActiveTexture(GL_TEXTURE0);

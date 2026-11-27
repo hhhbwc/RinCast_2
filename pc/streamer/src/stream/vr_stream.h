@@ -302,12 +302,14 @@ class VrStream {
     struct OneEuroFilter2D {
         float x = 0.5f, y = 0.5f;
         float dx = 0.0f, dy = 0.0f;
+        float lastSpeed = 0.0f;
         int64_t lastNs = 0;
         bool initialized = false;
 
         void Reset() {
             initialized = false;
             dx = dy = 0.0f;
+            lastSpeed = 0.0f;
             lastNs = 0;
         }
 
@@ -344,6 +346,7 @@ class VrStream {
             dx = alphaD * curDx + (1.0f - alphaD) * dx;
             dy = alphaD * curDy + (1.0f - alphaD) * dy;
             const float speed = std::sqrt(dx * dx + dy * dy);
+            lastSpeed = speed;
 
             const float cutoff = minCutoffHz + beta * speed;
             const float alphaPos = alpha(rate, cutoff);
@@ -355,6 +358,7 @@ class VrStream {
     };
 
     OneEuroFilter2D m_foveaFilter[2];
+    float m_alignedEncPx[2][2] = {{-1.f, -1.f}, {-1.f, -1.f}};
     int64_t m_recenterStartNs = 0;
     float m_recenterFrom[2][2] = {};
     bool m_wasTracking = false;

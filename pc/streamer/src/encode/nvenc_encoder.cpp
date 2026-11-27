@@ -534,6 +534,75 @@ class NvencEncoder final : public VideoEncoder {
         }
     }
 
+    void SetDynamicFoveation(const float foveaStart[2][2], float foveaSize,
+                             float densityX, float densityY, uint32_t bitrateKbps) override {
+        if (!m_foveated || m_config.width == 0 || m_config.height == 0) return;
+        // Bitrate-adaptive delta-QP: strongest in 40..100 Mbps bit-starved regime,
+        // tapered in 100..160 Mbps, disabled above 160 Mbps to avoid dark-gradient banding.
+        const int qpScale = m_config.codec == rc::VideoCodec::AV1 ? 4 : 1;
+        int centerDelta = 0, edgeDelta = 0;
+        if (bitrateKbps <= 100000) {
+            centerDelta = -2 * qpScale;
+            edgeDelta = 5 * qpScale;
+        } else if (bitrateKbps <= 160000) {
+            centerDelta = -1 * qpScale;
+            edgeDelta = 3 * qpScale;
+        }
+        if (m_dynFoveaValid && std::memcmp(foveaStart, m_dynFoveaStart, sizeof(m_dynFoveaStart)) == 0 &&
+            m_dynFoveaSize == foveaSize && m_dynDensityX == densityX && m_dynDensityY == densityY &&
+            m_dynCenterDelta == centerDelta && m_dynEdgeDelta == edgeDelta) {
+            return;
+        }
+        m_dynFoveaValid = true;
+        std::memcpy(m_dynFoveaStart, foveaStart, sizeof(m_dynFoveaStart));
+        m_dynFoveaSize = foveaSize;
+        m_dynDensityX = densityX;
+        m_dynDensityY = densityY;
+        m_dynCenterDelta = centerDelta;
+        m_dynEdgeDelta = edgeDelta;
+
+        const uint32_t bw = (m_config.width + m_blockSize - 1) / m_blockSize;
+        const uint32_t bh = (m_config.height + m_blockSize - 1) / m_blockSize;
+        m_qpMap.assign(size_t(bw) * bh, 0);
+        if (centerDelta == 0 && edgeDelta == 0) return;
+
+        const float F = std::clamp(foveaSize, 0.05f, 0.95f);
+        const float sx = std::clamp(densityX, 1e-3f, 1.0f);
+        const float sy = std::clamp(densityY, 1e-3f, 1.0f);
+        const float denomX = F + (1.0f - F) * sx;
+        const float denomY = F + (1.0f - F) * sy;
+        const float eyeW = m_config.width / 2.0f;
+        const float eyeH = float(m_config.height);
+        // Smooth 2.5-CTU transition skirt outside the fovea box prevents sharp blocking seams.
+        const float skirt = std::max(0.04f, 2.5f * float(m_blockSize) / std::max(1.0f, eyeW));
+        float eStart[2][2], eEnd[2][2];
+        for (int eye = 0; eye < 2; eye++) {
+            eStart[eye][0] = (foveaStart[eye][0] * sx) / denomX;
+            eEnd[eye][0] = (foveaStart[eye][0] * sx + F) / denomX;
+            eStart[eye][1] = (foveaStart[eye][1] * sy) / denomY;
+            eEnd[eye][1] = (foveaStart[eye][1] * sy + F) / denomY;
+        }
+        for (uint32_t by = 0; by < bh; by++) {
+            const float ey = std::clamp(((by + 0.5f) * m_blockSize) / eyeH, 0.0f, 1.0f);
+            for (uint32_t bx = 0; bx < bw; bx++) {
+                const float x = (bx + 0.5f) * m_blockSize;
+                const int eye = x < eyeW ? 0 : 1;
+                const float ex = std::clamp((x - eye * eyeW) / eyeW, 0.0f, 1.0f);
+                const float dx = ex < eStart[eye][0] ? (eStart[eye][0] - ex)
+                               : ex > eEnd[eye][0]   ? (ex - eEnd[eye][0])
+                                                     : 0.0f;
+                const float dy = ey < eStart[eye][1] ? (eStart[eye][1] - ey)
+                               : ey > eEnd[eye][1]   ? (ey - eEnd[eye][1])
+                                                     : 0.0f;
+                const float dist = std::sqrt(dx * dx + dy * dy);
+                const float t = std::clamp(dist / skirt, 0.0f, 1.0f);
+                const float s = t * t * (3.0f - 2.0f * t);
+                const float qpf = float(centerDelta) + s * float(edgeDelta - centerDelta);
+                m_qpMap[size_t(by) * bw + bx] = int8_t(std::clamp(int(std::lround(qpf)), -51, 51));
+            }
+        }
+    }
+
    private:
     static constexpr uint32_t kDpbFrames = 8;
     // The old CBR behaviour, kept for --cbr A/B runs and as a driver fallback:
@@ -722,6 +791,13 @@ class NvencEncoder final : public VideoEncoder {
     bool m_cappedVbr = true;  // false after a driver refused VBR, or with --cbr
     uint32_t m_blockSize = 32;
     float m_fov[2][4] = {};
+    bool m_dynFoveaValid = false;
+    float m_dynFoveaStart[2][2] = {};
+    float m_dynFoveaSize = 0.0f;
+    float m_dynDensityX = 0.0f;
+    float m_dynDensityY = 0.0f;
+    int m_dynCenterDelta = 0;
+    int m_dynEdgeDelta = 0;
     std::vector<int8_t> m_qpMap;
 };
 

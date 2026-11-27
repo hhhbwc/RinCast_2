@@ -2672,8 +2672,13 @@ void App::LatchVideo(const FrameState& frame, bool late) {
             m_scene.SetVrImageAdjust(effectiveSharpen, effectiveVibrance, effectiveDarkGamma);
             m_scene.SetFoveaDebug(m_forceFoveaDebug == 1 || (m_forceFoveaDebug == 2 && m_settings.foveaDebug));
             if (m_vrUpscaled) {
-                m_scene.KeepVideo(texture.texture, texture.crop, m_vrEyeWidth * 2, m_vrEyeHeight, foveation);
-                m_scene.DrawKeptUpscaled(fbo, m_vrSwapchain.width, m_vrSwapchain.height);
+                if (!m_settings.frameGeneration && m_scene.FusedGsrReady()) {
+                    m_scene.BlitExternalUpscaled(fbo, texture.texture, m_vrSwapchain.width, m_vrSwapchain.height,
+                                                 texture.crop, texture.width, texture.height, foveation);
+                } else {
+                    m_scene.KeepVideo(texture.texture, texture.crop, m_vrEyeWidth * 2, m_vrEyeHeight, foveation);
+                    m_scene.DrawKeptUpscaled(fbo, m_vrSwapchain.width, m_vrSwapchain.height);
+                }
             } else {
                 m_scene.BlitExternal(fbo, texture.texture, m_vrSwapchain.width, m_vrSwapchain.height, texture.crop, 0, 0,
                                      1, 1, foveation, effectiveSharpen, effectiveVibrance, effectiveDarkGamma,

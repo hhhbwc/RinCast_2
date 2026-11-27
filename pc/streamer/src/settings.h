@@ -114,6 +114,8 @@ struct Settings {
     // dead switch a reader would wonder about.
     int fecPercent = 5;
     bool foveatedEncoding = false;  // VR: fewer bits towards the lens edges
+    float foveaSize = 0.0f;         // 0 = auto (0.45 tracked / 0.60 fixed), or [0.10, 0.80]
+    float foveaPeriphery = 0.0f;    // 0 = auto (0.50 half density), or [0.25, 0.80]
     bool externalEyeTracking = false;  // External PC-side eye tracking (OSC / PaperTracker)
     bool adaptiveQuantization = true;
     bool twoPassEncoding = false;  // VR only; desktop streams always use two passes
@@ -137,8 +139,6 @@ struct Settings {
     float externalEyeOffsetY = 0.0f;  // [-20.0, 20.0] degrees
     float externalEyeGainX = 1.0f;    // [0.2, 3.0] scale multiplier
     float externalEyeGainY = 1.0f;    // [0.2, 3.0] scale multiplier
-    float foveaSize = 0.0f;           // 0 = auto (0.45 tracked / 0.60 fixed), or [0.10, 0.80]
-    float foveaPeriphery = 0.0f;      // 0 = auto (0.50 half density), or [0.10, 0.80]
 
     // Cloud
     std::string cloudUrl = "https://rincast.com";

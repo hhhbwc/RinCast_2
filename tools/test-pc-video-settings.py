@@ -44,7 +44,7 @@ def trigger_keys():
 class PcVideoSettingsGate(unittest.TestCase):
     def test_all_declared_video_keys_are_serialized_and_trigger_rebuild(self):
         video = SETTINGS.split("// Video", 1)[1].split("// Audio", 1)[0]
-        keys = set(re.findall(r"^\s*(?:bool|int|std::string)\s+(\w+)\s*=", video, re.M))
+        keys = set(re.findall(r"^\s*(?:bool|int|float|std::string)\s+(\w+)\s*=", video, re.M))
         self.assertTrue(keys)
         # A86: streamProfile stays as a runtime carrier in Settings for EffectiveSettings,
         # deliberately omitted from ToJson/FromJson persistence.

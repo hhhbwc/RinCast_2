@@ -115,6 +115,10 @@ class VideoEncoder {
     virtual bool InvalidateAfter(uint64_t /*timestamp*/) { return false; }
     // Side-by-side VR eyes: per-eye left, right, up, down tangents of the field of view.
     virtual void SetFoveation(const float /*fovTan*/[2][4]) {}
+    // Dual-track dynamic foveation on an already Foveator-squeezed frame: maps the full-density
+    // rectangle [a, a + foveaSize] into encoded-frame CTU coordinates and scales delta-QP by bitrate.
+    virtual void SetDynamicFoveation(const float /*foveaStart*/[2][2], float /*foveaSize*/,
+                                     float /*densityX*/, float /*densityY*/, uint32_t /*bitrateKbps*/) {}
     const EncoderConfig& Config() const { return m_config; }
 
    protected:

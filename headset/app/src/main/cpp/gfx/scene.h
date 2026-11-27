@@ -61,6 +61,10 @@ class SceneRenderer {
     void SetFoveaDebug(bool debug) { m_foveaDebug = debug; }
     bool FoveaDebug() const { return m_foveaDebug; }
     bool UpscalerReady() const { return m_upscalerReady; }
+    bool FusedGsrReady() const { return m_blitExtGsrReady; }
+    // Single-pass fused Fovea Unwarp + Fovea-only GSR directly from OES (skips KeepVideo FBO).
+    void BlitExternalUpscaled(GLuint dstFbo, GLuint texture, int dstW, int dstH, const float* crop,
+                              int srcW, int srcH, const VideoFoveation* foveation);
     // Keeps a width x height video frame as a normal texture, gamma-encoded, then draws it to dstFbo:
     void KeepVideo(GLuint texture, const float* crop, int width, int height, const VideoFoveation* foveation = nullptr);
     void DrawKept(GLuint dstFbo, int dstW, int dstH);
@@ -78,11 +82,14 @@ class SceneRenderer {
     void Blit2DAlpha(GLuint texture, int width, int height, float alpha);
 
    private:
-    Program m_panel2D, m_panelExt, m_beam, m_dot, m_blitExt, m_blit2D, m_blitExtGamma, m_gsr, m_kept, m_keptMoved, m_externalMoved;
+    Program m_panel2D, m_panelExt, m_beam, m_dot, m_blitExt, m_blit2D, m_blitExtGamma, m_blitExtGsr, m_gsr, m_kept, m_keptMoved, m_externalMoved;
     GLuint m_motionTexture = 0;
     int m_motionWidth = 0, m_motionHeight = 0;
     bool m_upscalerReady = false;
+    bool m_blitExtGsrReady = false;
     bool m_externalMovedReady = false;
+    VideoFoveation m_keptFoveation;
+    bool m_keptFoveated = false;
     GLuint m_externalTexture = 0;
     int m_externalWidth = 0, m_externalHeight = 0;
     float m_externalCrop[4] = {0, 0, 1, 1};

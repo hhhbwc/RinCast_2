@@ -390,7 +390,8 @@ std::string App::ApplySettingSideEffects(const json& changed) {
             changed.contains("videoPacingMode") || changed.contains("qualityProfileCbr") ||
             changed.contains("fillMode") ||
             changed.contains("fecPercent") ||
-            changed.contains("foveatedEncoding") || changed.contains("externalEyeTracking") ||
+            changed.contains("foveatedEncoding") || changed.contains("foveaSize") ||
+            changed.contains("foveaPeriphery") || changed.contains("externalEyeTracking") ||
             changed.contains("adaptiveQuantization") ||
             changed.contains("vrSlicedEncoding") ||
             changed.contains("twoPassEncoding") || changed.contains("encodeScalePct") ||
