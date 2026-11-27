@@ -65,6 +65,8 @@ json Settings::ToJson(bool forUi) const {
         {"externalEyeOffsetY", externalEyeOffsetY},
         {"externalEyeGainX", externalEyeGainX},
         {"externalEyeGainY", externalEyeGainY},
+        {"foveaSize", foveaSize > 0.05f ? foveaSize : 0.40f},
+        {"foveaPeriphery", foveaPeriphery > 0.05f ? foveaPeriphery : 0.50f},
         {"cloudUrl", cloudUrl},
         {"allowRemote", allowRemote},
         {"cloudUserName", cloudUserName},
@@ -133,6 +135,8 @@ void Settings::FromJson(const json& j) {
     get("externalEyeOffsetY", externalEyeOffsetY);
     get("externalEyeGainX", externalEyeGainX);
     get("externalEyeGainY", externalEyeGainY);
+    get("foveaSize", foveaSize);
+    get("foveaPeriphery", foveaPeriphery);
     get("cloudUrl", cloudUrl);
     get("allowRemote", allowRemote);
     get("cloudRefreshTokenProtected", cloudRefreshTokenProtected);
@@ -182,6 +186,10 @@ void Settings::FromJson(const json& j) {
     externalEyeOffsetY = std::clamp(externalEyeOffsetY, -20.0f, 20.0f);
     externalEyeGainX = std::clamp(externalEyeGainX, 0.2f, 3.0f);
     externalEyeGainY = std::clamp(externalEyeGainY, 0.2f, 3.0f);
+    if (foveaSize > 1.0f) foveaSize /= 100.0f;
+    if (foveaPeriphery > 1.0f) foveaPeriphery /= 100.0f;
+    if (foveaSize > 0.01f) foveaSize = std::clamp(foveaSize, 0.10f, 0.80f);
+    if (foveaPeriphery > 0.01f) foveaPeriphery = std::clamp(foveaPeriphery, 0.10f, 0.80f);
     if (externalEyeTracking && foveatedEncoding) foveatedEncoding = false;
     streamProfile = std::clamp(streamProfile, 0, 2);
     // 0 = follow the profile; otherwise clamp to the supported range.

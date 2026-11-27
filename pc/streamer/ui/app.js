@@ -816,6 +816,9 @@ function renderDependents() {
   const squeeze = !!state.session?.headsetGazeFoveation;
   $("#foveatedRow input").checked = !!state.settings.foveatedEncoding;
   setOff($("#foveatedRow"), !nvenc || squeeze);
+  const foveaActive = !!state.settings.externalEyeTracking || !!state.settings.foveatedEncoding || !!state.session?.headsetGazeFoveation;
+  const fovOpts = $("#foveatedParams");
+  if (fovOpts) fovOpts.hidden = !foveaActive;
   renderOscEyeStatus();
   // Two-pass is the user's own switch. A profile no longer forces it on (the old
   // Best-picture behaviour surprised users who had left it off), so the checkbox
@@ -1141,7 +1144,7 @@ function mock(msg) {
   const audio = { speaker: false, microphone: false, microphoneFeed: false, steam: { speaker: !(demo === "problem"), microphone: !(demo === "problem") }, active: demo === "problem" ? {} : { speaker: "steam", microphone: "steam" } };
   const base = mock.base ||= {
     type: "state", version: "1.0.0", downloadUrl: "https://rincast.com/#download", downloadSite: "rincast.com",
-    settings: { pcName: "Studio PC", codec: "auto", tenBit: false, vrBitrateMbps: 200, desktopBitrateMbps: 40, adaptiveBitrate: true, autoTune: false, streamProfile: 1, profileControlsVideo: false, qualityProfileCbr: false, fillMode: false, encodeScalePct: 0, pcBitrateWins: false, fecPercent: 5, foveatedEncoding: false, externalEyeTracking: false, externalEyeOscPort: 9945, externalEyeInvertX: false, externalEyeInvertY: false, externalEyeOffsetX: 0, externalEyeOffsetY: 0, externalEyeGainX: 1, externalEyeGainY: 1, adaptiveQuantization: true, twoPassEncoding: false, vrSlicedEncoding: false, desktopMaxHeight: 0, streamAudio: true, playOnPcToo: false, micPassthrough: true, switchDefaultAudio: true, audioDevices: "auto", autoRegisterSteamVrDriver: true, requireApproval: true, desktopInput: true, startWithWindows: true, preventSleep: true, cloudUrl: "https://rincast.com", allowRemote: true,
+    settings: { pcName: "Studio PC", codec: "auto", tenBit: false, vrBitrateMbps: 200, desktopBitrateMbps: 40, adaptiveBitrate: true, autoTune: false, streamProfile: 1, profileControlsVideo: false, qualityProfileCbr: false, fillMode: false, encodeScalePct: 0, pcBitrateWins: false, fecPercent: 5, foveatedEncoding: false, foveaSize: 0.4, foveaPeriphery: 0.5, externalEyeTracking: false, externalEyeOscPort: 9945, externalEyeInvertX: false, externalEyeInvertY: false, externalEyeOffsetX: 0, externalEyeOffsetY: 0, externalEyeGainX: 1, externalEyeGainY: 1, adaptiveQuantization: true, twoPassEncoding: false, vrSlicedEncoding: false, desktopMaxHeight: 0, streamAudio: true, playOnPcToo: false, micPassthrough: true, switchDefaultAudio: true, audioDevices: "auto", autoRegisterSteamVrDriver: true, requireApproval: true, desktopInput: true, startWithWindows: true, preventSleep: true, cloudUrl: "https://rincast.com", allowRemote: true,
       trustedDevices: none ? [] : [{ id: "q3", name: "Quest 3", model: "Meta Quest 3", lastSeen: Date.now() / 1000 }] },
     cloud: demo === "signedout" || demo === "firstrun" ? { signedIn: false } : { signedIn: true, userName: "Sam", email: "sam@example.com", status: demo === "problem" ? "error" : "online", error: demo === "problem" ? "The server didn't answer." : "", allowRemote: true },
     system: { gpu: demo === "problem" ? "Microsoft Basic Display Adapter" : "NVIDIA GeForce RTX 5070 Ti", port: 38711, addresses: ["192.168.1.20"], vpnAddresses: demo === "vpn" ? [{ name: "Tailscale", address: "100.101.102.103" }] : [], firewall: { otherNetworksOpen: demo !== "problem", publicInUse: demo === "public", publicAllowed: false, publicUnguarded: false }, encoder: demo === "problem" ? {} : { backend: "nvenc", h264: true, hevc: true, av1: true, hevc10: true },

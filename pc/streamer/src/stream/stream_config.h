@@ -136,7 +136,8 @@ inline VrStreamBuild BuildVrStreamConfig(const Settings& pc, const ClientStreamS
     const bool effectiveFoveate = st.gazeFoveation || externalEyes;
     const bool effectiveEyesTracked = st.eyesTracked || externalEyes;
     if (effectiveFoveate && cfg.encodeScale >= 1.0f) {
-        cfg.foveaSize = effectiveEyesTracked ? Foveator::kFoveaSize : Foveator::kFixedFoveaSize;
+        const float defaultFovea = effectiveEyesTracked ? Foveator::kFoveaSize : Foveator::kFixedFoveaSize;
+        cfg.foveaSize = pc.foveaSize > 0.05f ? pc.foveaSize : defaultFovea;
         // When the user lets the profiles drive video settings, each one floors the
         // full-density centre at its own share (latency 0.6, balanced 0.7, quality 0.8)
         // and only ever raises; matched-SteamVR sizes and the slow internet path pick
@@ -144,8 +145,9 @@ inline VrStreamBuild BuildVrStreamConfig(const Settings& pc, const ClientStreamS
         // the share sent to the headset - come from the same value.
         // A86b: foveation no longer follows a (now invisible) rung.
         cfg.foveaSize = QualityProfileFoveaFor(cfg.foveaSize);
-        cfg.foveatedEyeWidth = Foveator::EncodedSize(cfg.eyeWidth, cfg.foveaSize);
-        cfg.foveatedEyeHeight = Foveator::EncodedSize(cfg.eyeHeight, cfg.foveaSize);
+        const float periphery = pc.foveaPeriphery > 0.05f ? pc.foveaPeriphery : 0.50f;
+        cfg.foveatedEyeWidth = Foveator::EncodedSize(cfg.eyeWidth, cfg.foveaSize, periphery);
+        cfg.foveatedEyeHeight = Foveator::EncodedSize(cfg.eyeHeight, cfg.foveaSize, periphery);
         codedEyeW = rc::ScaledEncodeSize(cfg.foveatedEyeWidth * 2, cfg.encodeScale) / 2;
         codedEyeH = rc::ScaledEncodeSize(cfg.foveatedEyeHeight, cfg.encodeScale);
     }

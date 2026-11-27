@@ -7,7 +7,8 @@
 
 namespace rv {
 
-inline constexpr float kMaxStickDeadzone = 0.40f;
+inline constexpr float kMaxStickDeadzone = 1.0f;
+inline constexpr float kMaxStickCalibrationDrift = 0.40f;
 inline constexpr float kStickCalibrationMargin = 0.03f;
 inline constexpr int kStickCalibrationFrames = 45;
 
@@ -40,7 +41,7 @@ inline float SuggestDeadzoneForDrift(Vec2 raw, float margin = kStickCalibrationM
     const double r = StickMagnitude(raw);
     if (r < 0.005) return 0.f;
     const double target = std::ceil((r + safeMargin) * 100.0 - 1e-9) / 100.0;
-    return static_cast<float>(std::clamp(target, 0.0, static_cast<double>(kMaxStickDeadzone)));
+    return static_cast<float>(std::clamp(target, 0.0, static_cast<double>(kMaxStickCalibrationDrift)));
 }
 
 struct StickDeadzoneCalibration {
@@ -78,7 +79,7 @@ struct StickDeadzoneCalibration {
         if (invalid || samples != kStickCalibrationFrames) return false;
         const double meanMagnitude = std::hypot(sumX / samples, sumY / samples);
         // Peak covers jitter; a large peak-mean gap means the stick was moved, not resting.
-        return peakMagnitude + kStickCalibrationMargin <= kMaxStickDeadzone + 1e-6 &&
+        return peakMagnitude + kStickCalibrationMargin <= kMaxStickCalibrationDrift + 1e-6 &&
                peakMagnitude <= meanMagnitude + 0.08 + 1e-6;
     }
 

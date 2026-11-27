@@ -137,6 +137,8 @@ struct Settings {
     float externalEyeOffsetY = 0.0f;  // [-20.0, 20.0] degrees
     float externalEyeGainX = 1.0f;    // [0.2, 3.0] scale multiplier
     float externalEyeGainY = 1.0f;    // [0.2, 3.0] scale multiplier
+    float foveaSize = 0.0f;           // 0 = auto (0.45 tracked / 0.60 fixed), or [0.10, 0.80]
+    float foveaPeriphery = 0.0f;      // 0 = auto (0.50 half density), or [0.10, 0.80]
 
     // Cloud
     std::string cloudUrl = "https://rincast.com";

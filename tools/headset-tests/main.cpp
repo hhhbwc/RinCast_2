@@ -369,7 +369,8 @@ void TestThumbstickDeadzone() {
     CHECK(Vector2Near(ApplyThumbstickDeadzone({std::numeric_limits<float>::quiet_NaN(), 0.f}, 0.2f), {}));
     CHECK(Vector2Near(ApplyThumbstickDeadzone({0.f, std::numeric_limits<float>::infinity()}, 0.2f), {}));
     CHECK(Vector2Near(ApplyThumbstickDeadzone({0.1f, 0.f}, -1.f), {0.1f, 0.f}));
-    CHECK(Vector2Near(ApplyThumbstickDeadzone({0.5f, 0.f}, 2.f), {1.f / 6.f, 0.f}));
+    CHECK(Vector2Near(ApplyThumbstickDeadzone({0.5f, 0.f}, 0.4f), {1.f / 6.f, 0.f}));
+    CHECK(Vector2Near(ApplyThumbstickDeadzone({0.5f, 0.f}, 2.f), {}));
     CHECK(Vector2Near(ApplyThumbstickDeadzone({3.f, 4.f}, 0.f), {0.6f, 0.8f}));
     CHECK(Vector2Near(ApplyThumbstickDeadzone({std::numeric_limits<float>::max(), std::numeric_limits<float>::max()}, 0.2f),
                       {0.70710677f, 0.70710677f}));
@@ -377,7 +378,7 @@ void TestThumbstickDeadzone() {
     CHECK(Vector2Near(ApplyThumbstickDeadzone({0.6f, 0.f}, std::numeric_limits<float>::quiet_NaN()), {0.6f, 0.f}));
     CHECK(std::fabs(SuggestDeadzoneForDrift({0.06f, 0.08f}) - 0.13f) < 1e-6f);
     CHECK(SuggestDeadzoneForDrift({0.001f, 0.f}) == 0.f);
-    CHECK(SuggestDeadzoneForDrift({0.5f, 0.f}) == kMaxStickDeadzone);
+    CHECK(SuggestDeadzoneForDrift({0.5f, 0.f}) == kMaxStickCalibrationDrift);
 
     StickDeadzoneCalibration calibration;
     calibration.Start();
