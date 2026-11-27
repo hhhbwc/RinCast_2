@@ -52,6 +52,7 @@
     X(xrCreateActionSpace)                 \
     X(xrLocateSpace)                       \
     X(xrDestroySpace)                      \
+    X(xrEnumerateSwapchainFormats)         \
     X(xrCreateSwapchain)                   \
     X(xrDestroySwapchain)                  \
     X(xrEnumerateSwapchainImages)          \
@@ -88,5 +89,10 @@ bool Load();
 bool LoadInstance(XrInstance instance);
 // Which loader is in use, for the log.
 const char* Name();
+
+// Multi-candidate enumeration & loading for fallback:
+size_t CandidateCount();
+bool LoadCandidate(size_t index);
+void Unload();
 
 }  // namespace rv::xrloader

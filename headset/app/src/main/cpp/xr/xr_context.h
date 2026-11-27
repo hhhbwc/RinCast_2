@@ -90,6 +90,8 @@ class XrContext {
     bool DestroySwapchain(XrSwapchainGl& sc);
     GLuint AcquireImage(XrSwapchainGl& sc);   // returns FBO
     bool ReleaseImage(XrSwapchainGl& sc);
+    bool IsSrgbSwapchain() const { return m_srgbSwapchain; }
+    int64_t ColorSwapchainFormat() const { return m_colorSwapchainFormat; }
     // ROUND18 L8-TELEM: image count of the swapchain CreateSwapchain made last (the VR stream's
     // queue depth, when read right after its swapchain is built).
     uint32_t SwapchainImages() const { return m_swapchainImages; }
@@ -158,6 +160,8 @@ class XrContext {
     int m_spaceGeneration = 0;
     std::vector<std::string> m_extensions;
     std::string m_runtimeName;
+    bool m_srgbSwapchain = true;
+    int64_t m_colorSwapchainFormat = GL_SRGB8_ALPHA8;
     uint32_t m_recommendedWidth = 0, m_recommendedHeight = 0;
     XrSwapchainGl m_eyes[2];
     std::vector<XrSwapchainGl> m_retiredSwapchains;

@@ -187,7 +187,7 @@ void App::Init() {
         SaveSettings();
     };
     if (!m_keyboard.Init(m_assets, kbOut)) RC_LOGE("Keyboard: its assets are missing");
-    if (!m_scene.Init()) {
+    if (!m_scene.Init(m_xr.IsSrgbSwapchain())) {
         RC_LOGE("Scene renderer initialization failed");
         m_exit = true;
         m_xr.Shutdown();

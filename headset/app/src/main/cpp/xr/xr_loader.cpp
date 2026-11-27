@@ -1,11 +1,11 @@
 #include "xr_loader.h"
 
 #include <dlfcn.h>
+#include <vector>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
 #else
 #include <cstdlib>
-#include <vector>
 #endif
 
 #include <cstring>
@@ -27,7 +27,9 @@ namespace {
 constexpr const char* kKhronos = "libopenxr_loader.so";
 constexpr const char* kPico = "libopenxr_loader_pico.so";
 constexpr const char* kQuest1 = "libopenxr_loader_quest1.so";  // only in the Quest 1 build
-const char* g_name = kKhronos;
+constexpr const char* kAndroidXr = "libopenxr.google.so";
+std::string g_name = kKhronos;
+void* g_lib = nullptr;
 
 #ifdef __ANDROID__
 std::string Property(const char* name) {
@@ -43,7 +45,7 @@ template <typename T>
 bool Get(XrInstance instance, const char* name, T& out) {
     PFN_xrVoidFunction f = nullptr;
     if (XR_FAILED(xrGetInstanceProcAddr(instance, name, &f)) || !f) {
-        RC_LOGE("OpenXR: %s not found in %s", name, g_name);
+        RC_LOGE("OpenXR: %s not found in %s", name, g_name.c_str());
         return false;
     }
     out = reinterpret_cast<T>(f);
@@ -57,10 +59,16 @@ bool Get(XrInstance instance, const char* name, T& out) {
     // Ultra and anything newer use the standard one. Chinese domestic units report codenames
     // instead of marketing names: the PICO 4 is "Phoenix" (model A8110).
     const std::string manufacturer = Property("ro.product.manufacturer");
-    if (strcasecmp(manufacturer.c_str(), "pico") != 0) return false;
+    const std::string brand = Property("ro.product.brand");
+    const bool picoBrand = (strcasecmp(manufacturer.c_str(), "pico") == 0 ||
+                            strcasecmp(manufacturer.c_str(), "bytedance") == 0 ||
+                            strcasecmp(brand.c_str(), "pico") == 0 ||
+                            strcasecmp(brand.c_str(), "bytedance") == 0);
+    if (!picoBrand) return false;
     const std::string model = Property("ro.product.model");
     const std::string product = Property("ro.product.name");
-    RC_LOGI("PICO headset: model '%s', product '%s'", model.c_str(), product.c_str());
+    RC_LOGI("PICO headset: manufacturer '%s', brand '%s', model '%s', product '%s'",
+            manufacturer.c_str(), brand.c_str(), model.c_str(), product.c_str());
     if (model == "Pico Neo 3" || model == "Pico Neo3 Link") return true;
     if (model == "A8110" || model == "A8110 Pro") return true;
     return product == "PICO 4" || product == "PICO 4 Pro" || product == "PICO 4 Enterprise" || product == "PICO G3" ||
@@ -73,16 +81,9 @@ bool Get(XrInstance instance, const char* name, T& out) {
            Property("ro.product.device") == "monterey";
 }
 
-}  // namespace
-
-bool Load() {
-    if (xrGetInstanceProcAddr) return true;
-    void* lib = nullptr;
-#ifndef __ANDROID__
-    // Linux (Steam Frame): SteamVR's loader, launched from Steam. RINCAST_OPENXR_LOADER names
-    // another one; a system-wide loader comes next.
-    static std::string chosen;
+std::vector<std::string> BuildCandidates() {
     std::vector<std::string> candidates;
+#ifndef __ANDROID__
     if (const char* env = std::getenv("RINCAST_OPENXR_LOADER"); env && *env) candidates.push_back(env);
     candidates.push_back("libopenxr_loader.so.1");
     candidates.push_back("libopenxr_loader.so");
@@ -92,60 +93,91 @@ bool Load() {
         for (const char* steam : {"/.local/share/Steam", "/.steam/steam"})
             candidates.push_back(home + steam + "/steamapps/common/SteamVR/bin/" + arch + "/libopenxr_loader.so");
     }
-    for (const auto& c : candidates) {
-        lib = dlopen(c.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (lib) {
-            chosen = c;
-            g_name = chosen.c_str();
-            break;
-        }
-    }
-    if (!lib) {
-        RC_LOGE("OpenXR: no loader found (start RinCast from Steam, or set RINCAST_OPENXR_LOADER)");
-        return false;
-    }
 #else
     if (IsQuest1()) {
-        g_name = kQuest1;
-        lib = dlopen(g_name, RTLD_NOW | RTLD_LOCAL);
-        if (!lib) RC_LOGE("OpenXR: this is a Quest 1, which needs RinCast's Quest 1 build (%s)", dlerror());
+        candidates.push_back(kQuest1);
+        candidates.push_back(kKhronos);
+        candidates.push_back("/system/lib64/libopenxr_loader.so");
+        candidates.push_back("/vendor/lib64/libopenxr_loader.so");
+    } else if (UsePicoLoader()) {
+        candidates.push_back(kPico);
+        candidates.push_back(kKhronos);
+        candidates.push_back(kAndroidXr);
+        candidates.push_back("/system/lib64/libopenxr_loader.so");
+        candidates.push_back("/vendor/lib64/libopenxr_loader.so");
     } else {
-        const char* primary = UsePicoLoader() ? kPico : kKhronos;
-        const char* secondary = (primary == kPico) ? kKhronos : kPico;
-        g_name = primary;
-        lib = dlopen(g_name, RTLD_NOW | RTLD_LOCAL);
-        if (!lib) {
-            RC_LOGW("OpenXR: primary loader %s failed (%s), trying fallback %s", primary, dlerror(), secondary);
-            g_name = secondary;
-            lib = dlopen(g_name, RTLD_NOW | RTLD_LOCAL);
-        }
-        if (!lib) {
-            const char* systemLoaders[] = {"libopenxr_loader.so", "/system/lib64/libopenxr_loader.so", "/vendor/lib64/libopenxr_loader.so"};
-            for (const char* sysLib : systemLoaders) {
-                lib = dlopen(sysLib, RTLD_NOW | RTLD_LOCAL);
-                if (lib) {
-                    g_name = sysLib;
-                    RC_LOGI("OpenXR: loaded system loader %s", g_name);
-                    break;
-                }
-            }
-        }
+        candidates.push_back(kKhronos);
+        candidates.push_back(kPico);
+        candidates.push_back(kAndroidXr);
+        candidates.push_back("/system/lib64/libopenxr_loader.so");
+        candidates.push_back("/vendor/lib64/libopenxr_loader.so");
     }
 #endif
-    if (!lib) {
-        RC_LOGE("OpenXR: couldn't load %s: %s", g_name, dlerror());
+    return candidates;
+}
+
+const std::vector<std::string>& GetCandidates() {
+    static const std::vector<std::string> s_candidates = BuildCandidates();
+    return s_candidates;
+}
+
+}  // namespace
+
+void Unload() {
+    if (g_lib) {
+        dlclose(g_lib);
+        g_lib = nullptr;
+    }
+    xrGetInstanceProcAddr = nullptr;
+#define RV_XR_CLEAR(name) name = nullptr;
+    RV_XR_GLOBAL_FUNCTIONS(RV_XR_CLEAR)
+    RV_XR_INSTANCE_FUNCTIONS(RV_XR_CLEAR)
+#undef RV_XR_CLEAR
+}
+
+size_t CandidateCount() {
+    return GetCandidates().size();
+}
+
+bool LoadCandidate(size_t index) {
+    Unload();
+    const auto& candidates = GetCandidates();
+    if (index >= candidates.size()) return false;
+    const std::string& target = candidates[index];
+    g_lib = dlopen(target.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!g_lib) {
+        RC_LOGW("OpenXR candidate [%zu/%zu] %s dlopen failed: %s",
+                index + 1, candidates.size(), target.c_str(), dlerror());
         return false;
     }
-    xrGetInstanceProcAddr = reinterpret_cast<PFN_xrGetInstanceProcAddr>(dlsym(lib, "xrGetInstanceProcAddr"));
+    xrGetInstanceProcAddr = reinterpret_cast<PFN_xrGetInstanceProcAddr>(dlsym(g_lib, "xrGetInstanceProcAddr"));
     if (!xrGetInstanceProcAddr) {
-        RC_LOGE("OpenXR: %s has no xrGetInstanceProcAddr", g_name);
+        RC_LOGW("OpenXR: %s has no xrGetInstanceProcAddr", target.c_str());
+        Unload();
         return false;
     }
-    RC_LOGI("OpenXR loader: %s", g_name);
-#define RV_XR_GET(name) ok = Get(XR_NULL_HANDLE, #name, name) && ok;
+    g_name = target;
+    RC_LOGI("OpenXR loader loaded: %s (candidate %zu/%zu)", g_name.c_str(), index + 1, candidates.size());
     bool ok = true;
+#define RV_XR_GET(name) ok = Get(XR_NULL_HANDLE, #name, name) && ok;
     RV_XR_GLOBAL_FUNCTIONS(RV_XR_GET)
-    return ok;
+#undef RV_XR_GET
+    if (!ok) {
+        RC_LOGW("OpenXR candidate %s missing required global functions", g_name.c_str());
+        Unload();
+        return false;
+    }
+    return true;
+}
+
+bool Load() {
+    if (xrGetInstanceProcAddr) return true;
+    const size_t count = CandidateCount();
+    for (size_t i = 0; i < count; i++) {
+        if (LoadCandidate(i)) return true;
+    }
+    RC_LOGE("OpenXR: all loader candidates failed to load");
+    return false;
 }
 
 bool LoadInstance(XrInstance instance) {
@@ -157,6 +189,6 @@ bool LoadInstance(XrInstance instance) {
     return ok;
 }
 
-const char* Name() { return g_name; }
+const char* Name() { return g_name.c_str(); }
 
 }  // namespace rv::xrloader

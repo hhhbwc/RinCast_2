@@ -3,6 +3,8 @@
 #include <cstring>
 #include <vector>
 
+#include "rc/platform.h"
+
 #ifndef GL_FRAMEBUFFER_SRGB_EXT
 #define GL_FRAMEBUFFER_SRGB_EXT 0x8DB9  // GL_EXT_sRGB_write_control
 #endif
@@ -478,7 +480,7 @@ void SceneRenderer::Shutdown() {
     }
 }
 
-bool SceneRenderer::Init() {
+bool SceneRenderer::Init(bool srgbSwapchain) {
     m_beamVao = 0;
     m_beamVbo = 0;
     m_gridVao = 0;
@@ -490,11 +492,12 @@ bool SceneRenderer::Init() {
     ok &= m_beam.Build(kBeamVs, kBeamFs, "beam");
     ok &= m_dot.Build(kDotVs, kDotFs, "dot");
     // The video is gamma encoded and the layer images are sRGB. With sRGB writes switched off
-    // (GL_EXT_sRGB_write_control) its values go in as they are; otherwise every pixel is decoded
+    // (GL_EXT_sRGB_write_control) or on non-sRGB Swapchain formats (e.g. GL_RGBA8 fallback),
+    // its values go in as they are; otherwise every pixel is decoded
     // to linear (three pow()s) for the hardware to encode right back, for the same bytes.
     const char* glExtensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
     m_rawSrgbWrites = glExtensions && std::strstr(glExtensions, "GL_EXT_sRGB_write_control");
-    const std::string toLayer = m_rawSrgbWrites
+    const std::string toLayer = (!srgbSwapchain || m_rawSrgbWrites)
         ? "vec3 ToLayer(vec3 g) { return g; }\n"
         : "vec3 ToLayer(vec3 g) { return mix(g / 12.92, pow((g + 0.055) / 1.055, vec3(2.4)), step(0.04045, g)); }\n";
     const std::string ext = "#extension GL_OES_EGL_image_external_essl3 : require\n";
@@ -506,7 +509,9 @@ bool SceneRenderer::Init() {
     m_upscalerReady = m_kept.Build(kBlitVs, (toLayer + kColorGradeFs + kCas2DFs + kKeptFs).c_str(), "kept") && m_upscalerReady;
     m_upscalerReady = m_keptMoved.Build(kBlitVs, (toLayer + kColorGradeFs + kCas2DFs + kKeptMovedFs).c_str(), "keptMoved") && m_upscalerReady;
     m_externalMovedReady = m_externalMoved.Build(kBlitVs, (ext + toLayer + kColorGradeFs + kCasExtFs + kFoveateFs + kExternalMovedFs).c_str(), "externalMoved");
-    ok &= m_externalMovedReady;
+    if (!m_externalMovedReady) {
+        RC_LOGW("Optional externalMoved shader failed to build, frame reprojection will degrade safely");
+    }
     ok &= m_blitExt.Build(kBlitVs, blitExt.c_str(), "blitExt");
     ok &= m_blit2D.Build(kBlitVs, kBlit2DFs, "blit2d");
 

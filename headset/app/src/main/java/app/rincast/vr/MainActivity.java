@@ -167,6 +167,7 @@ public class MainActivity extends NativeActivity {
                             if (info.isSoftwareOnly()) continue;
                         } catch (Throwable ignored) {}
                     }
+                    if (info.getName() == null) continue;
                     String name = info.getName().toLowerCase(java.util.Locale.ROOT);
                     if (name.contains(".secure") || name.startsWith("c2.android.") || name.startsWith("omx.google.") ||
                         name.startsWith("omx.ffmpeg.") || name.startsWith("c2.google.")) {
@@ -214,7 +215,8 @@ public class MainActivity extends NativeActivity {
                                 if (caps != null) {
                                     if (caps.profileLevels != null) {
                                         for (MediaCodecInfo.CodecProfileLevel pl : caps.profileLevels) {
-                                            if (pl.profile == 0x2 /* AV1ProfileMain10 */) {
+                                            if (pl.profile == 0x2 /* AV1ProfileMain10 */ ||
+                                                pl.profile == 0x1000 || pl.profile == 0x2000) {
                                                 hasAv110 = true;
                                                 break;
                                             }
@@ -264,7 +266,16 @@ public class MainActivity extends NativeActivity {
 
     /** The system's language as a BCP 47 tag, e.g. "zh-CN", for the UI's "auto" language. */
     public String getSystemLocale() {
-        return android.content.res.Resources.getSystem().getConfiguration().getLocales().get(0).toLanguageTag();
+        try {
+            android.os.LocaleList locales = android.content.res.Resources.getSystem().getConfiguration().getLocales();
+            if (locales != null && !locales.isEmpty() && locales.get(0) != null) {
+                return locales.get(0).toLanguageTag();
+            }
+        } catch (Throwable ignored) {}
+        try {
+            return java.util.Locale.getDefault().toLanguageTag();
+        } catch (Throwable ignored) {}
+        return "en-US";
     }
 
     public boolean hasMicPermission() {
@@ -350,16 +361,18 @@ public class MainActivity extends NativeActivity {
 
     public void playUiSound(int kind) {
         try {
+            if (kind < 0 || kind >= uiSounds.length) return;
             if (uiSounds[0] == null) {
                 uiSounds[0] = makeSound(new double[] {1400}, 25, 0.12);
                 uiSounds[1] = makeSound(new double[] {660, 990}, 90, 0.2);
                 uiSounds[2] = makeSound(new double[] {440, 330}, 130, 0.22);
             }
             final AudioTrack t = uiSounds[kind];
+            if (t == null) return;
             t.stop();
             t.reloadStaticData();
             t.play();
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             // Sounds are a nicety: never let them disturb the app.
         }
     }

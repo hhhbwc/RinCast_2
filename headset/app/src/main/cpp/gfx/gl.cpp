@@ -10,6 +10,9 @@
 #ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
 #define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
 #endif
+#ifndef GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
+#endif
 
 namespace rv {
 
@@ -69,7 +72,23 @@ static void SetSampling(GLenum target, bool mipmaps) {
     glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    if (mipmaps) glTexParameterf(target, GL_TEXTURE_MAX_ANISOTROPY_EXT, 8.f);
+    if (mipmaps) {
+        static bool s_checked = false;
+        static bool s_hasAniso = false;
+        static float s_maxAniso = 1.0f;
+        if (!s_checked) {
+            const char* glExts = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+            s_hasAniso = glExts && std::strstr(glExts, "GL_EXT_texture_filter_anisotropic");
+            if (s_hasAniso) {
+                glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &s_maxAniso);
+                if (s_maxAniso < 1.0f) s_maxAniso = 1.0f;
+            }
+            s_checked = true;
+        }
+        if (s_hasAniso && s_maxAniso > 1.0f) {
+            glTexParameterf(target, GL_TEXTURE_MAX_ANISOTROPY_EXT, std::min(8.0f, s_maxAniso));
+        }
+    }
 }
 
 bool LoadImageTexture(const std::vector<uint8_t>& file, int channels, bool srgb, bool mipmaps, Texture& out) {

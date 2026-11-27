@@ -122,25 +122,47 @@ bool XrContext::HasExtension(const char* name) const {
 
 bool XrContext::InitEgl() {
     m_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    eglInitialize(m_display, nullptr, nullptr);
-    const EGLint attribs[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
-                              EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_SAMPLES, 0,
-                              EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE};
-    EGLint count = 0;
-    if (!eglChooseConfig(m_display, attribs, &m_config, 1, &count) || count == 0) {
-        RC_LOGE("eglChooseConfig failed");
+    if (m_display == EGL_NO_DISPLAY) {
+        RC_LOGE("eglGetDisplay failed: 0x%x", eglGetError());
         return false;
     }
-    const EGLint ctxAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 1, EGL_NONE};
-    m_context = eglCreateContext(m_display, m_config, EGL_NO_CONTEXT, ctxAttribs);
+    if (!eglInitialize(m_display, nullptr, nullptr)) {
+        RC_LOGE("eglInitialize failed: 0x%x", eglGetError());
+        return false;
+    }
+    const EGLint attribsES3[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+                                 EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_SAMPLES, 0,
+                                 EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE};
+    EGLint count = 0;
+    if (!eglChooseConfig(m_display, attribsES3, &m_config, 1, &count) || count == 0) {
+        RC_LOGW("eglChooseConfig with ES3 failed, retrying with ES2 config bit");
+        const EGLint attribsES2[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+                                     EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_SAMPLES, 0,
+                                     EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE};
+        if (!eglChooseConfig(m_display, attribsES2, &m_config, 1, &count) || count == 0) {
+            RC_LOGE("eglChooseConfig failed for both ES3 and ES2");
+            return false;
+        }
+    }
+    const EGLint ctxAttribs31[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 1, EGL_NONE};
+    m_context = eglCreateContext(m_display, m_config, EGL_NO_CONTEXT, ctxAttribs31);
     if (m_context == EGL_NO_CONTEXT) {
-        RC_LOGE("eglCreateContext failed");
+        RC_LOGW("eglCreateContext ES 3.1 failed, falling back to ES 3.0");
+        const EGLint ctxAttribs30[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE};
+        m_context = eglCreateContext(m_display, m_config, EGL_NO_CONTEXT, ctxAttribs30);
+    }
+    if (m_context == EGL_NO_CONTEXT) {
+        RC_LOGE("eglCreateContext failed: 0x%x", eglGetError());
         return false;
     }
     const EGLint pbAttribs[] = {EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE};
     m_surface = eglCreatePbufferSurface(m_display, m_config, pbAttribs);
+    if (m_surface == EGL_NO_SURFACE) {
+        RC_LOGE("eglCreatePbufferSurface failed: 0x%x", eglGetError());
+        return false;
+    }
     if (!eglMakeCurrent(m_display, m_surface, m_surface, m_context)) {
-        RC_LOGE("eglMakeCurrent failed");
+        RC_LOGE("eglMakeCurrent failed: 0x%x", eglGetError());
         return false;
     }
     RC_LOGI("GL: %s / %s", glGetString(GL_RENDERER), glGetString(GL_VERSION));
@@ -148,147 +170,174 @@ bool XrContext::InitEgl() {
 }
 
 bool XrContext::CreateInstance(android_app* app, const std::vector<const char*>& extra) {
-    if (!xrloader::Load()) return false;
-#ifdef __ANDROID__
-    auto initLoader = GetProc<PFN_xrInitializeLoaderKHR>(XR_NULL_HANDLE, "xrInitializeLoaderKHR");
-    if (initLoader) {
-        XrLoaderInitInfoAndroidKHR info{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
-        info.applicationVM = app->activity->vm;
-        info.applicationContext = app->activity->clazz;
-        initLoader(reinterpret_cast<XrLoaderInitInfoBaseHeaderKHR*>(&info));
-    }
-#endif
+    const size_t totalCandidates = xrloader::CandidateCount();
+    for (size_t candIdx = 0; candIdx < totalCandidates; candIdx++) {
+        if (!xrloader::LoadCandidate(candIdx)) {
+            continue;
+        }
+        RC_LOGI("Trying OpenXR candidate [%zu/%zu]: %s", candIdx + 1, totalCandidates, xrloader::Name());
+        m_extensions.clear();
 
-    uint32_t count = 0;
-    xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
-    std::vector<XrExtensionProperties> props(count, {XR_TYPE_EXTENSION_PROPERTIES});
-    xrEnumerateInstanceExtensionProperties(nullptr, count, &count, props.data());
-
-    const char* wanted[] = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME,
 #ifdef __ANDROID__
-                            XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
-                            XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME,
-#else
-                            XR_KHR_OPENGL_ENABLE_EXTENSION_NAME,
-                            XR_MNDX_EGL_ENABLE_EXTENSION_NAME,
-#endif
-                            XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME,
-                            XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
-                            XR_FB_PASSTHROUGH_EXTENSION_NAME,
-                            XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME,
-                            XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME,
-                            XR_FB_COMPOSITION_LAYER_ALPHA_BLEND_EXTENSION_NAME,
-                            XR_EXT_HAND_TRACKING_EXTENSION_NAME,
-                            XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME,
-                            XR_META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME,
-                            XR_META_DETACHED_CONTROLLERS_EXTENSION_NAME,
-                            XR_EXT_LOCAL_FLOOR_EXTENSION_NAME,
-                            XR_FB_COLOR_SPACE_EXTENSION_NAME,
-                            XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME};
-    std::vector<const char*> all(std::begin(wanted), std::end(wanted));
-    all.insert(all.end(), extra.begin(), extra.end());
-    std::vector<const char*> enabled;
-    for (const char* w : all) {
-        if (HasExtension(w)) continue;  // named twice
-        for (const auto& p : props) {
-            if (strcmp(p.extensionName, w) == 0) {
-                enabled.push_back(w);
-                m_extensions.push_back(w);
-                break;
+        auto initLoader = GetProc<PFN_xrInitializeLoaderKHR>(XR_NULL_HANDLE, "xrInitializeLoaderKHR");
+        if (initLoader) {
+            XrLoaderInitInfoAndroidKHR info{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
+            info.applicationVM = app ? app->activity->vm : nullptr;
+            info.applicationContext = app ? app->activity->clazz : nullptr;
+            const XrResult r = initLoader(reinterpret_cast<XrLoaderInitInfoBaseHeaderKHR*>(&info));
+            if (XR_FAILED(r)) {
+                RC_LOGW("OpenXR candidate %s: xrInitializeLoaderKHR failed: %s", xrloader::Name(), XrResultString(r));
+                xrloader::Unload();
+                continue;
             }
         }
-    }
-#ifdef __ANDROID__
-    // The runtime's full list is the device-authoritative answer for extension decisions.
-    // logcat drops lines over 4 KB, so print ~25 names per line instead of one long line.
-    {
-        constexpr size_t kPerLine = 25;
-        const int segments = int((props.size() + kPerLine - 1) / kPerLine);
-        RC_LOGI("Runtime extensions: %zu total, %d segments", props.size(), segments);
-        std::string segment;
-        for (size_t i = 0; i < props.size(); ++i) {
-            if (i % kPerLine == 0) segment.clear();
-            segment += (segment.empty() ? "" : " ") + std::string(props[i].extensionName);
-            if (i % kPerLine == kPerLine - 1 || i + 1 == props.size())
-                RC_LOGI("Runtime extensions [%d/%d]: %s", int(i / kPerLine) + 1, segments, segment.c_str());
+#endif
+
+        uint32_t count = 0;
+        XrResult rEnum = xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
+        if (XR_FAILED(rEnum)) {
+            RC_LOGW("OpenXR candidate %s: xrEnumerateInstanceExtensionProperties failed: %s", xrloader::Name(), XrResultString(rEnum));
+            xrloader::Unload();
+            continue;
         }
-    }
-    if (!HasExtension(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME)) {
-        RC_LOGE("Runtime lacks XR_KHR_opengl_es_enable");
-        return false;
-    }
-#else
-    {
-        std::string all;
-        for (const auto& p : props) all += std::string(" ") + p.extensionName;
-        RC_LOGI("Runtime extensions:%s", all.c_str());
-    }
-    // RinCast draws with OpenGL ES (and its video shaders need ES's external textures). An
-    // EGL context reaches the runtime through XR_MNDX_egl_enable; if the runtime has no GL ES
-    // extension, the same context goes under XR_KHR_opengl_enable.
-    if (!HasExtension(XR_MNDX_EGL_ENABLE_EXTENSION_NAME)) {
-        RC_LOGE("Runtime lacks XR_MNDX_egl_enable: it can't take an EGL context");
-        return false;
-    }
-    m_glNotEs = !HasExtension(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME);
-    if (m_glNotEs && !HasExtension(XR_KHR_OPENGL_ENABLE_EXTENSION_NAME)) {
-        RC_LOGE("Runtime has neither XR_KHR_opengl_es_enable nor XR_KHR_opengl_enable");
-        return false;
-    }
-    // Only one graphics API per instance.
-    const char* unused = m_glNotEs ? XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME : XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
-    std::erase_if(enabled, [&](const char* e) { return !strcmp(e, unused); });
-    std::erase_if(m_extensions, [&](const std::string& e) { return e == unused; });
-    RC_LOGI("Graphics: OpenGL ES context through XR_MNDX_egl_enable, as %s",
-            m_glNotEs ? "XR_KHR_opengl_enable (the runtime has no GL ES extension)" : "XR_KHR_opengl_es_enable");
-#endif
-    if (m_compatPlainOpenXr) {
-        auto isVendorExt = [](const char* name) {
-            return strncmp(name, "XR_FB_", 6) == 0 ||
-                   strncmp(name, "XR_META_", 8) == 0 ||
-                   strncmp(name, "XR_BD_", 6) == 0 ||
-                   strncmp(name, "XR_HTC_", 7) == 0;
-        };
-        std::erase_if(enabled, [&](const char* e) { return isVendorExt(e); });
-        std::erase_if(m_extensions, [&](const std::string& e) { return isVendorExt(e.c_str()); });
-        RC_LOGI("compatPlainOpenXr: stripped vendor extensions, left %zu pure Khronos/standard extensions", enabled.size());
-    }
-    m_cylinder = HasExtension(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
-    m_layerSettings = HasExtension(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
-    m_handTracking = HasExtension(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+        std::vector<XrExtensionProperties> props(count, {XR_TYPE_EXTENSION_PROPERTIES});
+        if (count > 0) {
+            rEnum = xrEnumerateInstanceExtensionProperties(nullptr, count, &count, props.data());
+            if (XR_FAILED(rEnum)) {
+                RC_LOGW("OpenXR candidate %s: xrEnumerateInstanceExtensionProperties(data) failed: %s", xrloader::Name(), XrResultString(rEnum));
+                xrloader::Unload();
+                continue;
+            }
+        }
 
-    XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
+        const char* wanted[] = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME,
 #ifdef __ANDROID__
-    XrInstanceCreateInfoAndroidKHR android{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
-    android.applicationVM = app->activity->vm;
-    android.applicationActivity = app->activity->clazz;
-    ci.next = &android;
+                                XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
+                                XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME,
 #else
-    (void)app;
+                                XR_KHR_OPENGL_ENABLE_EXTENSION_NAME,
+                                XR_MNDX_EGL_ENABLE_EXTENSION_NAME,
 #endif
-    strcpy(ci.applicationInfo.applicationName, "RinCast");
-    ci.applicationInfo.applicationVersion = 1;
-    strcpy(ci.applicationInfo.engineName, "RinCast");
-    ci.applicationInfo.engineVersion = 1;
-    ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
-    ci.enabledExtensionCount = uint32_t(enabled.size());
-    ci.enabledExtensionNames = enabled.data();
-    XR_CHECK(xrCreateInstance(&ci, &m_instance));
-    if (!xrloader::LoadInstance(m_instance)) return false;
-    XrInstanceProperties ip{XR_TYPE_INSTANCE_PROPERTIES};
-    if (XR_SUCCEEDED(xrGetInstanceProperties(m_instance, &ip))) m_runtimeName = ip.runtimeName;
-    RC_LOGI("OpenXR runtime: %s", m_runtimeName.c_str());
+                                XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME,
+                                XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
+                                XR_FB_PASSTHROUGH_EXTENSION_NAME,
+                                XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME,
+                                XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME,
+                                XR_FB_COMPOSITION_LAYER_ALPHA_BLEND_EXTENSION_NAME,
+                                XR_EXT_HAND_TRACKING_EXTENSION_NAME,
+                                XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME,
+                                XR_META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME,
+                                XR_META_DETACHED_CONTROLLERS_EXTENSION_NAME,
+                                XR_EXT_LOCAL_FLOOR_EXTENSION_NAME,
+                                XR_FB_COLOR_SPACE_EXTENSION_NAME,
+                                XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME};
+        std::vector<const char*> all(std::begin(wanted), std::end(wanted));
+        all.insert(all.end(), extra.begin(), extra.end());
+        std::vector<const char*> enabled;
+        for (const char* w : all) {
+            if (HasExtension(w)) continue;  // named twice
+            for (const auto& p : props) {
+                if (strcmp(p.extensionName, w) == 0) {
+                    enabled.push_back(w);
+                    m_extensions.push_back(w);
+                    break;
+                }
+            }
+        }
+#ifdef __ANDROID__
+        if (!HasExtension(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME)) {
+            RC_LOGW("OpenXR candidate %s lacks XR_KHR_opengl_es_enable", xrloader::Name());
+            xrloader::Unload();
+            continue;
+        }
+#else
+        if (!HasExtension(XR_MNDX_EGL_ENABLE_EXTENSION_NAME)) {
+            RC_LOGW("OpenXR candidate %s lacks XR_MNDX_egl_enable", xrloader::Name());
+            xrloader::Unload();
+            continue;
+        }
+        m_glNotEs = !HasExtension(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME);
+        if (m_glNotEs && !HasExtension(XR_KHR_OPENGL_ENABLE_EXTENSION_NAME)) {
+            RC_LOGW("OpenXR candidate %s has neither XR_KHR_opengl_es_enable nor XR_KHR_opengl_enable", xrloader::Name());
+            xrloader::Unload();
+            continue;
+        }
+        const char* unused = m_glNotEs ? XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME : XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
+        std::erase_if(enabled, [&](const char* e) { return !strcmp(e, unused); });
+        std::erase_if(m_extensions, [&](const std::string& e) { return e == unused; });
+#endif
+        if (m_compatPlainOpenXr) {
+            auto isVendorExt = [](const char* name) {
+                return strncmp(name, "XR_FB_", 6) == 0 ||
+                       strncmp(name, "XR_META_", 8) == 0 ||
+                       strncmp(name, "XR_BD_", 6) == 0 ||
+                       strncmp(name, "XR_HTC_", 7) == 0;
+            };
+            std::erase_if(enabled, [&](const char* e) { return isVendorExt(e); });
+            std::erase_if(m_extensions, [&](const std::string& e) { return isVendorExt(e.c_str()); });
+        }
+        m_cylinder = HasExtension(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+        m_layerSettings = HasExtension(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
+        m_handTracking = HasExtension(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
 
-    XrSystemGetInfo sgi{XR_TYPE_SYSTEM_GET_INFO};
-    sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
-    XR_CHECK(xrGetSystem(m_instance, &sgi, &m_system));
+        XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
+#ifdef __ANDROID__
+        XrInstanceCreateInfoAndroidKHR android{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
+        android.applicationVM = app ? app->activity->vm : nullptr;
+        android.applicationActivity = app ? app->activity->clazz : nullptr;
+        ci.next = &android;
+#else
+        (void)app;
+#endif
+        strcpy(ci.applicationInfo.applicationName, "RinCast");
+        ci.applicationInfo.applicationVersion = 1;
+        strcpy(ci.applicationInfo.engineName, "RinCast");
+        ci.applicationInfo.engineVersion = 1;
+        ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+        ci.enabledExtensionCount = uint32_t(enabled.size());
+        ci.enabledExtensionNames = enabled.data();
 
-    if (HasExtension(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME)) {
-        m_fromTimespec = GetProc<PFN_xrConvertTimespecTimeToTimeKHR>(m_instance, "xrConvertTimespecTimeToTimeKHR");
-        m_toTimespec = GetProc<PFN_xrConvertTimeToTimespecTimeKHR>(m_instance, "xrConvertTimeToTimespecTimeKHR");
+        XrInstance instance = XR_NULL_HANDLE;
+        XrResult rInst = xrCreateInstance(&ci, &instance);
+        if (XR_FAILED(rInst) || instance == XR_NULL_HANDLE) {
+            RC_LOGW("OpenXR candidate %s: xrCreateInstance failed: %s", xrloader::Name(), XrResultString(rInst));
+            xrloader::Unload();
+            continue;
+        }
+        if (!xrloader::LoadInstance(instance)) {
+            RC_LOGW("OpenXR candidate %s: LoadInstance failed", xrloader::Name());
+            xrDestroyInstance(instance);
+            xrloader::Unload();
+            continue;
+        }
+
+        XrSystemGetInfo sgi{XR_TYPE_SYSTEM_GET_INFO};
+        sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+        XrSystemId system = XR_NULL_SYSTEM_ID;
+        XrResult rSys = xrGetSystem(instance, &sgi, &system);
+        if (XR_FAILED(rSys)) {
+            RC_LOGW("OpenXR candidate %s: xrGetSystem failed: %s", xrloader::Name(), XrResultString(rSys));
+            xrDestroyInstance(instance);
+            xrloader::Unload();
+            continue;
+        }
+
+        m_instance = instance;
+        m_system = system;
+        XrInstanceProperties ip{XR_TYPE_INSTANCE_PROPERTIES};
+        if (XR_SUCCEEDED(xrGetInstanceProperties(m_instance, &ip))) m_runtimeName = ip.runtimeName;
+        RC_LOGI("OpenXR runtime: %s (loader: %s)", m_runtimeName.c_str(), xrloader::Name());
+
+        if (HasExtension(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME)) {
+            m_fromTimespec = GetProc<PFN_xrConvertTimespecTimeToTimeKHR>(m_instance, "xrConvertTimespecTimeToTimeKHR");
+            m_toTimespec = GetProc<PFN_xrConvertTimeToTimespecTimeKHR>(m_instance, "xrConvertTimeToTimespecTimeKHR");
+        }
+        RC_LOGI("OpenXR instance created with %zu extensions", enabled.size());
+        return true;
     }
-    RC_LOGI("OpenXR instance created with %zu extensions", enabled.size());
-    return true;
+
+    RC_LOGE("OpenXR: all loader candidates failed to initialize");
+    return false;
 }
 
 bool XrContext::CreateSession(bool preferStage) {
@@ -331,6 +380,37 @@ bool XrContext::CreateSession(bool preferStage) {
     rs.poseInReferenceSpace.orientation.w = 1;
     XR_CHECK(xrCreateReferenceSpace(m_session, &rs, &m_viewSpace));
 
+    // Enumerate supported swapchain formats
+    uint32_t formatCount = 0;
+    XR_CHECK(xrEnumerateSwapchainFormats(m_session, 0, &formatCount, nullptr));
+    std::vector<int64_t> formats(formatCount);
+    XR_CHECK(xrEnumerateSwapchainFormats(m_session, formatCount, &formatCount, formats.data()));
+
+    bool hasSrgb = false;
+    bool hasRgba8 = false;
+    for (int64_t f : formats) {
+        if (f == GL_SRGB8_ALPHA8) hasSrgb = true;
+        if (f == GL_RGBA8) hasRgba8 = true;
+    }
+
+    if (hasSrgb) {
+        m_colorSwapchainFormat = GL_SRGB8_ALPHA8;
+        m_srgbSwapchain = true;
+        RC_LOGI("OpenXR Swapchain color format: GL_SRGB8_ALPHA8 (sRGB enabled)");
+    } else if (hasRgba8) {
+        m_colorSwapchainFormat = GL_RGBA8;
+        m_srgbSwapchain = false;
+        RC_LOGW("OpenXR Swapchain: GL_SRGB8_ALPHA8 unsupported by runtime, falling back to GL_RGBA8 (non-sRGB)");
+    } else if (!formats.empty()) {
+        m_colorSwapchainFormat = formats[0];
+        m_srgbSwapchain = (m_colorSwapchainFormat == GL_SRGB8_ALPHA8);
+        RC_LOGW("OpenXR Swapchain: using runtime preferred format 0x%llx (sRGB=%d)",
+                static_cast<unsigned long long>(m_colorSwapchainFormat), m_srgbSwapchain ? 1 : 0);
+    } else {
+        m_colorSwapchainFormat = GL_SRGB8_ALPHA8;
+        m_srgbSwapchain = true;
+    }
+
     // Eye swapchains.
     uint32_t viewCount = 0;
     XR_CHECK(xrEnumerateViewConfigurationViews(m_instance, m_system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0,
@@ -367,7 +447,7 @@ bool XrContext::CreateSession(bool preferStage) {
         return false;
     }
     for (int eye = 0; eye < 2; eye++) {
-        if (!CreateSwapchain(w, h, GL_SRGB8_ALPHA8, 1, true, m_eyes[eye], 1,
+        if (!CreateSwapchain(w, h, m_colorSwapchainFormat, 1, true, m_eyes[eye], 1,
                              eye == 0 ? "eye-left" : "eye-right")) {
             for (int previous = 0; previous < eye; previous++) {
                 if (!DestroySwapchain(m_eyes[previous]))
@@ -467,8 +547,16 @@ bool XrContext::StartSession(bool preferStage, bool velocitiesFromPoses) {
 void XrContext::Shutdown() {
     for (auto& e : m_eyes) DestroySwapchain(e);
     RetryRetiredSwapchains();
-    if (m_passthroughLayer) GetProc<PFN_xrDestroyPassthroughLayerFB>(m_instance, "xrDestroyPassthroughLayerFB")(m_passthroughLayer);
-    if (m_passthrough) GetProc<PFN_xrDestroyPassthroughFB>(m_instance, "xrDestroyPassthroughFB")(m_passthrough);
+    if (m_passthroughLayer) {
+        if (auto destroyLayer = GetProc<PFN_xrDestroyPassthroughLayerFB>(m_instance, "xrDestroyPassthroughLayerFB"))
+            destroyLayer(m_passthroughLayer);
+        m_passthroughLayer = XR_NULL_HANDLE;
+    }
+    if (m_passthrough) {
+        if (auto destroyPt = GetProc<PFN_xrDestroyPassthroughFB>(m_instance, "xrDestroyPassthroughFB"))
+            destroyPt(m_passthrough);
+        m_passthrough = XR_NULL_HANDLE;
+    }
     if (m_appSpace) xrDestroySpace(m_appSpace);
     if (m_viewSpace) xrDestroySpace(m_viewSpace);
     if (m_session) xrDestroySession(m_session);
@@ -585,9 +673,13 @@ bool XrContext::CreateSwapchain(int width, int height, int64_t format, int array
     };
     if (width <= 0 || height <= 0 || arraySize <= 0 || mipCount <= 0)
         return fail("invalid swapchain dimensions");
+    int64_t chosenFormat = format;
+    if (!m_srgbSwapchain && format == GL_SRGB8_ALPHA8) {
+        chosenFormat = m_colorSwapchainFormat;
+    }
     XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
     ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-    ci.format = format;
+    ci.format = chosenFormat;
     ci.sampleCount = 1;
     ci.width = uint32_t(width);
     ci.height = uint32_t(height);
@@ -595,6 +687,12 @@ bool XrContext::CreateSwapchain(int width, int height, int64_t format, int array
     ci.arraySize = uint32_t(arraySize);
     ci.mipCount = uint32_t(mipCount);
     XrResult result = xrCreateSwapchain(m_session, &ci, &created.handle);
+    if (result == XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED && ci.format != GL_RGBA8) {
+        RC_LOGW("Swapchain format 0x%llx unsupported, retrying with GL_RGBA8",
+                static_cast<unsigned long long>(ci.format));
+        ci.format = GL_RGBA8;
+        result = xrCreateSwapchain(m_session, &ci, &created.handle);
+    }
     if (XR_FAILED(result))
         return fail(rc::StrFormat("xrCreateSwapchain result=%d (%s)", int(result), XrResultString(result)).c_str());
     uint32_t n = 0;
@@ -1008,11 +1106,11 @@ void XrContext::SetPassthrough(bool enable) {
     }
     if (!m_passthrough || !m_passthroughLayer) return;
     if (enable) {
-        GetProc<PFN_xrPassthroughStartFB>(m_instance, "xrPassthroughStartFB")(m_passthrough);
-        GetProc<PFN_xrPassthroughLayerResumeFB>(m_instance, "xrPassthroughLayerResumeFB")(m_passthroughLayer);
+        if (auto start = GetProc<PFN_xrPassthroughStartFB>(m_instance, "xrPassthroughStartFB")) start(m_passthrough);
+        if (auto resume = GetProc<PFN_xrPassthroughLayerResumeFB>(m_instance, "xrPassthroughLayerResumeFB")) resume(m_passthroughLayer);
     } else {
-        GetProc<PFN_xrPassthroughLayerPauseFB>(m_instance, "xrPassthroughLayerPauseFB")(m_passthroughLayer);
-        GetProc<PFN_xrPassthroughPauseFB>(m_instance, "xrPassthroughPauseFB")(m_passthrough);
+        if (auto pauseLayer = GetProc<PFN_xrPassthroughLayerPauseFB>(m_instance, "xrPassthroughLayerPauseFB")) pauseLayer(m_passthroughLayer);
+        if (auto pause = GetProc<PFN_xrPassthroughPauseFB>(m_instance, "xrPassthroughPauseFB")) pause(m_passthrough);
     }
     m_passthroughActive = enable;
 }

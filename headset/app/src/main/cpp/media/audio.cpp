@@ -34,7 +34,11 @@ bool AudioPlayer::StartLocked() {
     else
         m_jitter.Configure(2, rc::kAudioSampleRate, 30, 150);
     AAudioStreamBuilder* b = nullptr;
-    AAudio_createStreamBuilder(&b);
+    const aaudio_result_t bRes = AAudio_createStreamBuilder(&b);
+    if (bRes != AAUDIO_OK || !b) {
+        RC_LOGE("AudioPlayer: AAudio_createStreamBuilder failed: %s", AAudio_convertResultToText(bRes));
+        return false;
+    }
     AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_OUTPUT);
     AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
     AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);
@@ -45,15 +49,26 @@ bool AudioPlayer::StartLocked() {
     AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_MOVIE);
     AAudioStreamBuilder_setDataCallback(b, Callback, this);
     AAudioStreamBuilder_setErrorCallback(b, ErrorCallback, this);
-    const aaudio_result_t r = AAudioStreamBuilder_openStream(b, &m_stream);
-    AAudioStreamBuilder_delete(b);
+    aaudio_result_t r = AAudioStreamBuilder_openStream(b, &m_stream);
     if (r != AAUDIO_OK) {
+        RC_LOGW("AAudio low-latency output open failed (%s), retrying without low-latency mode", AAudio_convertResultToText(r));
+        AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_NONE);
+        r = AAudioStreamBuilder_openStream(b, &m_stream);
+    }
+    AAudioStreamBuilder_delete(b);
+    if (r != AAUDIO_OK || !m_stream) {
         RC_LOGE("AAudio output open failed: %s", AAudio_convertResultToText(r));
         m_stream = nullptr;
         return false;
     }
     AAudioStream_setBufferSizeInFrames(m_stream, AAudioStream_getFramesPerBurst(m_stream) * 2);
-    AAudioStream_requestStart(m_stream);
+    const aaudio_result_t startRes = AAudioStream_requestStart(m_stream);
+    if (startRes != AAUDIO_OK) {
+        RC_LOGE("AAudioStream_requestStart failed: %s", AAudio_convertResultToText(startRes));
+        AAudioStream_close(m_stream);
+        m_stream = nullptr;
+        return false;
+    }
     return true;
 }
 
@@ -195,7 +210,11 @@ bool MicCapture::Start(PacketSink sink) {
     m_sink = std::move(sink);
     if (!m_encoder.Init(rc::kAudioSampleRate, 1, 48000, true)) return false;
     AAudioStreamBuilder* b = nullptr;
-    AAudio_createStreamBuilder(&b);
+    const aaudio_result_t bRes = AAudio_createStreamBuilder(&b);
+    if (bRes != AAUDIO_OK || !b) {
+        RC_LOGE("MicCapture: AAudio_createStreamBuilder failed: %s", AAudio_convertResultToText(bRes));
+        return false;
+    }
     AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_INPUT);
     AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
     AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_I16);
@@ -204,9 +223,16 @@ bool MicCapture::Start(PacketSink sink) {
     AAudioStreamBuilder_setInputPreset(b, AAUDIO_INPUT_PRESET_VOICE_COMMUNICATION);
     AAudioStreamBuilder_setDataCallback(b, Callback, this);
     AAudioStreamBuilder_setErrorCallback(b, ErrorCallback, this);
-    const aaudio_result_t r = AAudioStreamBuilder_openStream(b, &m_stream);
-    AAudioStreamBuilder_delete(b);
+    aaudio_result_t r = AAudioStreamBuilder_openStream(b, &m_stream);
     if (r != AAUDIO_OK) {
+        RC_LOGW("Microphone low-latency / voice communication open failed (%s), retrying generic fallback",
+                AAudio_convertResultToText(r));
+        AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_NONE);
+        AAudioStreamBuilder_setInputPreset(b, AAUDIO_INPUT_PRESET_GENERIC);
+        r = AAudioStreamBuilder_openStream(b, &m_stream);
+    }
+    AAudioStreamBuilder_delete(b);
+    if (r != AAUDIO_OK || !m_stream) {
         RC_LOGW("Microphone unavailable: %s", AAudio_convertResultToText(r));
         m_stream = nullptr;
         return false;
@@ -218,7 +244,13 @@ bool MicCapture::Start(PacketSink sink) {
     m_prevSample = 0;
     RC_LOGI("Microphone: %d Hz, %d channel(s), %s%s", m_rate, m_channels, m_float ? "float" : "16-bit",
             m_rate != int(rc::kAudioSampleRate) || m_channels != 1 || m_float ? ", converting to 48 kHz mono 16-bit" : "");
-    AAudioStream_requestStart(m_stream);
+    const aaudio_result_t startRes = AAudioStream_requestStart(m_stream);
+    if (startRes != AAUDIO_OK) {
+        RC_LOGE("MicCapture: AAudioStream_requestStart failed: %s", AAudio_convertResultToText(startRes));
+        AAudioStream_close(m_stream);
+        m_stream = nullptr;
+        return false;
+    }
     return true;
 }
 

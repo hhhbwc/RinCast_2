@@ -246,7 +246,9 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
         if (!safeFallback) {
             AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_MAX_WIDTH, m_width);
             AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_MAX_HEIGHT, m_height);
-            AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, m_width * m_height);
+            const int64_t rawInputSize = static_cast<int64_t>(m_width) * m_height;
+            const int32_t clampedInputSize = static_cast<int32_t>(std::clamp<int64_t>(rawInputSize, 1024 * 1024, INT32_MAX));
+            AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, clampedInputSize);
             // Latency over everything else.
             AMediaFormat_setInt32(fmt, "low-latency", 1);
             AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_PRIORITY, 0);

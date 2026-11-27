@@ -36,7 +36,7 @@ struct PanelDraw {
 class SceneRenderer {
    public:
     ~SceneRenderer();
-    bool Init();
+    bool Init(bool srgbSwapchain = true);
     void Shutdown();
     void SetViewProjection(const Mat4& viewProj, const Vec3& eyePos) {
         m_viewProj = viewProj;
