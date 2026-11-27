@@ -35,10 +35,12 @@ inline void FoveaSquare(const float halves[4], const float* gaze, float f, bool 
     }
     const float x = std::clamp(u - f / 2, 0.f, 1.f - f);
     const float y = std::clamp(v - f / 2, 0.f, 1.f - f);
-    // Move only on a real move, so the encoder can keep referring to earlier frames.
-    // A remembered corner that is not finite (from before this rule) is replaced.
-    if (!placed || !std::isfinite(s[0]) || !std::isfinite(s[1]) || std::fabs(x - s[0]) > 0.04f ||
-        std::fabs(y - s[1]) > 0.04f) {
+    // Move only on a real move: when actively tracking gaze (gaze != nullptr), use a tight 0.008 threshold
+    // for responsive low-latency tracking. When fallback to lens centre (gaze == nullptr), keep the 0.04
+    // hysteresis gate to protect reference frames and avoid jitter.
+    const float moveThresh = (gaze && gaze[2] < -0.2f) ? 0.008f : 0.04f;
+    if (!placed || !std::isfinite(s[0]) || !std::isfinite(s[1]) || std::fabs(x - s[0]) > moveThresh ||
+        std::fabs(y - s[1]) > moveThresh) {
         s[0] = x;
         s[1] = y;
     }

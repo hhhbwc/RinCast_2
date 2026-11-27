@@ -94,12 +94,24 @@ void VrStream::PlaceFovea(const float fovTan[2][4], float start[2][2]) {
         g = m_gaze;
         at = m_gazeNs;
     }
-    const bool fresh = at && rc::NowNs() - at < 250'000'000LL;
+    const int64_t now = rc::NowNs();
+    const int64_t ageNs = at ? (now - at) : 10'000'000'000LL;
+    // 1) Gaze is fresh (< 800 ms): live track the eyes.
+    // 2) Gaze lost/blinking briefly (800 ms .. 2000 ms): hold last placed fovea, never snap to centre.
+    // 3) Gaze lost for a long time (> 2000 ms): gracefully fall back to lens centre.
+    const bool fresh = ageNs < 800'000'000LL;
+    const bool holdGrace = m_foveaPlaced && (ageNs < 2'000'000'000LL);
+
     for (int eye = 0; eye < 2; eye++) {
         // The eye's own gaze, or the other one's while it blinks.
         const int from = (g.flags & (1 << eye)) ? eye : (g.flags & (1 << (1 - eye))) ? 1 - eye : -1;
-        const float* gaze = fresh && from >= 0 ? g.gaze[from] : nullptr;
-        rc::FoveaSquare(fovTan[eye], gaze, m_config.foveaSize, m_foveaPlaced, m_foveaStart[eye]);
+        if (fresh && from >= 0) {
+            rc::FoveaSquare(fovTan[eye], g.gaze[from], m_config.foveaSize, m_foveaPlaced, m_foveaStart[eye]);
+        } else if (holdGrace) {
+            // Blink or brief tracking loss: hold fovea in place to prevent twitching/flicker.
+        } else {
+            rc::FoveaSquare(fovTan[eye], nullptr, m_config.foveaSize, m_foveaPlaced, m_foveaStart[eye]);
+        }
         start[eye][0] = m_foveaStart[eye][0];
         start[eye][1] = m_foveaStart[eye][1];
     }

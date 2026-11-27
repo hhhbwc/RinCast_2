@@ -513,6 +513,21 @@ void OscEyeReceiver::WorkerLoop(uint16_t port) {
             m_status.lastNormY = normY;
             if (!lastAddr.empty()) m_status.lastAddress = lastAddr;
             m_lastValidNs = nowNs;
+        } else if (ok) {
+            // Valid OSC packet (e.g. repeated sequence on stationary fixation or blink parameter):
+            // keep heartbeat alive and maintain downstream gaze so watchdog does not starve.
+            std::lock_guard lock(m_statusMutex);
+            m_status.active = true;
+            if (!lastAddr.empty()) m_status.lastAddress = lastAddr;
+            m_lastValidNs = nowNs;
+            if (parserState.hasValidGaze) {
+                GazeCallback cb;
+                {
+                    std::lock_guard cbLock(m_cbMutex);
+                    cb = m_callback;
+                }
+                if (cb) cb(parserState.lastValidGaze);
+            }
         } else if (!ok) {
             std::lock_guard lock(m_statusMutex);
             ++m_status.unrecognizedPackets;
