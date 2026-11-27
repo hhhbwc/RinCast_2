@@ -152,7 +152,7 @@ bool ColorConverter::Convert(ID3D11DeviceContext* ctx, ID3D11Texture2D* rgb) {
                     : desc.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS    ? DXGI_FORMAT_B8G8R8A8_UNORM
                     : desc.Format == DXGI_FORMAT_R10G10B10A2_TYPELESS ? DXGI_FORMAT_R10G10B10A2_UNORM
                     : desc.Format == DXGI_FORMAT_R16G16B16A16_TYPELESS
-                        ? DXGI_FORMAT_R16G16B16A16_UNORM
+                        ? DXGI_FORMAT_R16G16B16A16_FLOAT
                         : desc.Format;
         const HRESULT hr = m_device->CreateShaderResourceView(rgb, &sd, &m_inputSrv);
         if (FAILED(hr)) {

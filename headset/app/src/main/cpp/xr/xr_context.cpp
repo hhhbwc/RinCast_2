@@ -306,7 +306,9 @@ bool XrContext::CreateInstance(android_app* app, const std::vector<const char*>&
         }
         if (!xrloader::LoadInstance(instance)) {
             RC_LOGW("OpenXR candidate %s: LoadInstance failed", xrloader::Name());
-            xrDestroyInstance(instance);
+            auto destroyFn = xrDestroyInstance ? xrDestroyInstance
+                                               : GetProc<PFN_xrDestroyInstance>(instance, "xrDestroyInstance");
+            if (destroyFn) destroyFn(instance);
             xrloader::Unload();
             continue;
         }

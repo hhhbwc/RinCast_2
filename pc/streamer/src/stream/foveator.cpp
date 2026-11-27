@@ -74,6 +74,12 @@ bool Foveator::Init(ID3D11Device* device, uint32_t eyeWidth, uint32_t eyeHeight,
     m_eyeHeight = eyeHeight;
     m_encodedWidth = encodedEyeWidth;
     m_encodedHeight = encodedEyeHeight;
+    m_output.Reset();
+    m_rtv.Reset();
+    m_vs.Reset();
+    m_ps.Reset();
+    m_sampler.Reset();
+    m_params.Reset();
     m_lastInput = nullptr;
     m_inputSrv.Reset();
     D3D11_TEXTURE2D_DESC td{};
@@ -135,8 +141,8 @@ bool Foveator::Squeeze(ID3D11DeviceContext* ctx, ID3D11Texture2D* frame, const f
     std::memcpy(p.start, foveaStart, sizeof(float) * 4);
     p.layout[0] = F;
     const float oneMinusF = std::max(1e-4f, 1.0f - F);
-    p.layout[1] = m_eyeWidth ? (float(m_encodedWidth) / m_eyeWidth - F) / oneMinusF : 1.0f;
-    p.layout[2] = m_eyeHeight ? (float(m_encodedHeight) / m_eyeHeight - F) / oneMinusF : 1.0f;
+    p.layout[1] = std::clamp(m_eyeWidth ? (float(m_encodedWidth) / m_eyeWidth - F) / oneMinusF : 1.0f, 1e-3f, 1.0f);
+    p.layout[2] = std::clamp(m_eyeHeight ? (float(m_encodedHeight) / m_eyeHeight - F) / oneMinusF : 1.0f, 1e-3f, 1.0f);
     p.texel[0] = m_eyeWidth ? 1.f / (m_eyeWidth * 2) : 0.f;
     p.texel[1] = m_eyeHeight ? 1.f / m_eyeHeight : 0.f;
     D3D11_MAPPED_SUBRESOURCE mapped;

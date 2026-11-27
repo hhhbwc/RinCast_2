@@ -128,10 +128,12 @@ bool VideoDecoder::Init(rc::VideoCodec codec, int width, int height, float fps) 
     m_width = width;
     m_height = height;
     m_fps = fps > 1 ? fps : 72;  // ROUND18 L4 fallback
+    m_readerMaxImages = 8;
     media_status_t st = AImageReader_newWithUsage(width, height, AIMAGE_FORMAT_PRIVATE,
                                                   AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 8, &m_reader);
     if (st != AMEDIA_OK || !m_reader) {
         // Fallback to 4 buffers if 8 fails due to memory constraints on certain GPU architectures
+        m_readerMaxImages = 4;
         st = AImageReader_newWithUsage(width, height, AIMAGE_FORMAT_PRIVATE,
                                        AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 4, &m_reader);
     }
@@ -222,7 +224,7 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
         }
         char* component = nullptr;
         const media_status_t componentStatus = AMediaCodec_getName(m_codecHandle, &component);
-        std::string compName = component ? component : "";
+        std::string compName = (componentStatus == AMEDIA_OK && component) ? component : "";
         if (component) AMediaCodec_releaseName(m_codecHandle, component);
 
         std::string compLower = compName;
@@ -246,8 +248,8 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
         if (!safeFallback) {
             AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_MAX_WIDTH, m_width);
             AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_MAX_HEIGHT, m_height);
-            const int64_t rawInputSize = static_cast<int64_t>(m_width) * m_height;
-            const int32_t clampedInputSize = static_cast<int32_t>(std::clamp<int64_t>(rawInputSize, 1024 * 1024, INT32_MAX));
+            const int64_t rawInputSize = static_cast<int64_t>(m_width) * m_height / 4;
+            const int32_t clampedInputSize = static_cast<int32_t>(std::clamp<int64_t>(rawInputSize, 1024 * 1024, 8 * 1024 * 1024));
             AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, clampedInputSize);
             // Latency over everything else.
             AMediaFormat_setInt32(fmt, "low-latency", 1);
@@ -629,9 +631,11 @@ bool VideoDecoder::Latch(DecodedFrameInfo& out) {
     }
     PublishTextureGeometry(Texture(), int(desc.width), int(desc.height), nextCrop);
 
-    // Keep the previous images alive for a couple of frames (GPU may still read them).
+    // Keep the previous images alive briefly (GPU may still read them); shrink retired depth
+    // when AImageReader fell back to 4 buffers to avoid starving the decoder output surface.
+    const size_t maxRetired = m_readerMaxImages <= 4 ? 1u : 2u;
     if (m_image) m_retired.push_back({m_image, m_eglImage});
-    while (m_retired.size() > 2) {
+    while (m_retired.size() > maxRetired) {
         ReleaseImage(m_retired.front().first, m_retired.front().second);
         m_retired.pop_front();
     }

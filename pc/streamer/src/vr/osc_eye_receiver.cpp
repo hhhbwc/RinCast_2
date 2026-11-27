@@ -357,11 +357,12 @@ void OscEyeReceiver::SetCallback(GazeCallback cb) {
 }
 
 void OscEyeReceiver::Configure(bool enabled, uint16_t port, bool invertX, bool invertY) {
+    std::lock_guard lifecycleLock(m_lifecycleMutex);
     m_invertX.store(invertX, std::memory_order_relaxed);
     m_invertY.store(invertY, std::memory_order_relaxed);
     if (enabled == m_enabled && (!enabled || port == m_port)) return;
 
-    Stop();
+    StopLocked();
     m_enabled = enabled;
     m_port = port;
     {
@@ -377,31 +378,13 @@ void OscEyeReceiver::Configure(bool enabled, uint16_t port, bool invertX, bool i
     m_thread = std::thread([this, port] { WorkerLoop(port); });
 }
 
-void OscEyeReceiver::CloseSocket() {
-    std::lock_guard lock(m_sockMutex);
-    const SOCKET s = static_cast<SOCKET>(m_socket);
-    if (s != INVALID_SOCKET) {
-        closesocket(s);
-        m_socket = static_cast<uintptr_t>(INVALID_SOCKET);
-    }
+void OscEyeReceiver::Stop() {
+    std::lock_guard lifecycleLock(m_lifecycleMutex);
+    StopLocked();
 }
 
-void OscEyeReceiver::Stop() {
+void OscEyeReceiver::StopLocked() {
     m_running.store(false, std::memory_order_release);
-    // Unsubscribe from PaperTracker before closing the socket.
-    {
-        std::lock_guard lock(m_sockMutex);
-        const SOCKET s = static_cast<SOCKET>(m_socket);
-        if (s != INVALID_SOCKET && m_port != 0) {
-            sockaddr_in target{};
-            target.sin_family = AF_INET;
-            target.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            target.sin_port = htons(m_port);
-            sendto(s, reinterpret_cast<const char*>(kUnsubscribeMsg), sizeof(kUnsubscribeMsg), 0,
-                   reinterpret_cast<const sockaddr*>(&target), sizeof(target));
-        }
-    }
-    CloseSocket();
     if (m_thread.joinable()) m_thread.join();
     m_enabled = false;
     std::lock_guard lock(m_statusMutex);
@@ -465,10 +448,6 @@ void OscEyeReceiver::WorkerLoop(uint16_t port) {
     target.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     target.sin_port = htons(port);
 
-    {
-        std::lock_guard lock(m_sockMutex);
-        m_socket = static_cast<uintptr_t>(s);
-    }
     {
         std::lock_guard lock(m_statusMutex);
         m_status.listening = true;
@@ -541,7 +520,13 @@ void OscEyeReceiver::WorkerLoop(uint16_t port) {
         }
     }
 
-    CloseSocket();
+    // Unsubscribe cleanly from the sole owning thread right before closing the socket:
+    // guarantees unsubscribe always follows the last subscribe and prevents WSAENOTSOCK.
+    if (port != 0) {
+        sendto(s, reinterpret_cast<const char*>(kUnsubscribeMsg), sizeof(kUnsubscribeMsg), 0,
+               reinterpret_cast<const sockaddr*>(&target), sizeof(target));
+    }
+    closesocket(s);
     RC_LOGI("OSC eye receiver stopped");
 }
 

@@ -190,17 +190,21 @@ inline void WriteTracking(Shared* s, const TrackingSnapshot& snap) {
     InterlockedIncrement64(&s->trackingSeqlock);  // -> even
 }
 
+inline LONG64 ReadSeqlockAcquire(const volatile LONG64* seq) {
+    return InterlockedCompareExchange64(const_cast<volatile LONG64*>(seq), 0, 0);
+}
+
 inline bool ReadTracking(const Shared* s, TrackingSnapshot& out) {
     for (int attempt = 0; attempt < 64; attempt++) {
-        const LONG64 before = s->trackingSeqlock;
+        const LONG64 before = ReadSeqlockAcquire(&s->trackingSeqlock);
         if (before & 1) {
-            YieldProcessor();
+            if (attempt < 32) YieldProcessor();
+            else SwitchToThread();
             continue;
         }
-        MemoryBarrier();
         std::memcpy(&out, const_cast<const TrackingSnapshot*>(&s->tracking), sizeof(out));
         MemoryBarrier();
-        if (s->trackingSeqlock == before) return before != 0;
+        if (ReadSeqlockAcquire(&s->trackingSeqlock) == before) return before != 0;
     }
     return false;
 }
@@ -215,15 +219,15 @@ inline void WriteBody(Shared* s, const BodySnapshot& snap) {
 
 inline bool ReadBody(const Shared* s, BodySnapshot& out) {
     for (int attempt = 0; attempt < 64; attempt++) {
-        const LONG64 before = s->bodySeqlock;
+        const LONG64 before = ReadSeqlockAcquire(&s->bodySeqlock);
         if (before & 1) {
-            YieldProcessor();
+            if (attempt < 32) YieldProcessor();
+            else SwitchToThread();
             continue;
         }
-        MemoryBarrier();
         std::memcpy(&out, const_cast<const BodySnapshot*>(&s->body), sizeof(out));
         MemoryBarrier();
-        if (s->bodySeqlock == before) return before != 0;
+        if (ReadSeqlockAcquire(&s->bodySeqlock) == before) return before != 0;
     }
     return false;
 }
@@ -238,15 +242,15 @@ inline void WriteHand(Shared* s, int hand, const HandSnapshot& snap) {
 
 inline bool ReadHand(const Shared* s, int hand, HandSnapshot& out) {
     for (int attempt = 0; attempt < 64; attempt++) {
-        const LONG64 before = s->handSeqlock[hand];
+        const LONG64 before = ReadSeqlockAcquire(&s->handSeqlock[hand]);
         if (before & 1) {
-            YieldProcessor();
+            if (attempt < 32) YieldProcessor();
+            else SwitchToThread();
             continue;
         }
-        MemoryBarrier();
         std::memcpy(&out, const_cast<const HandSnapshot*>(&s->hands[hand]), sizeof(out));
         MemoryBarrier();
-        if (s->handSeqlock[hand] == before) return before != 0;
+        if (ReadSeqlockAcquire(&s->handSeqlock[hand]) == before) return before != 0;
     }
     return false;
 }

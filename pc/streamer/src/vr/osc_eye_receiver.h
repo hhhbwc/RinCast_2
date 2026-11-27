@@ -65,20 +65,18 @@ class OscEyeReceiver {
 
    private:
     void WorkerLoop(uint16_t port);
-    void CloseSocket();
+    void StopLocked();
 
     GazeCallback m_callback;
     std::mutex m_cbMutex;
 
+    std::mutex m_lifecycleMutex;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_invertX{false};
     std::atomic<bool> m_invertY{false};
     bool m_enabled = false;
     uint16_t m_port = 9945;
     std::thread m_thread;
-
-    std::mutex m_sockMutex;
-    uintptr_t m_socket = ~uintptr_t(0);  // INVALID_SOCKET
 
     mutable std::mutex m_statusMutex;
     OscEyeStatus m_status;

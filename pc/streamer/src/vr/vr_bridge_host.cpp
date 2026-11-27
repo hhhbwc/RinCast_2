@@ -106,10 +106,18 @@ bool VrBridgeHost::CreateTextures(uint32_t width, uint32_t height, bool tenBit) 
     m_device.As(&device1);
     const DXGI_FORMAT format = tenBit ? DXGI_FORMAT_R10G10B10A2_TYPELESS : DXGI_FORMAT_R8G8B8A8_TYPELESS;
     const uint32_t generation = m_generation.fetch_add(1, std::memory_order_relaxed) + 1;
+    ComPtr<ID3D11Texture2D> newTextures[rcvr::kFrameSlots];
+    HANDLE newHandles[rcvr::kFrameSlots] = {};
+    wchar_t newNames[rcvr::kFrameSlots][64] = {};
+    auto cleanupNew = [&] {
+        for (HANDLE& h : newHandles) {
+            if (h) {
+                CloseHandle(h);
+                h = nullptr;
+            }
+        }
+    };
     for (int i = 0; i < rcvr::kFrameSlots; i++) {
-        if (m_textureHandles[i]) CloseHandle(m_textureHandles[i]);
-        m_textureHandles[i] = nullptr;
-        m_textures[i].Reset();
         D3D11_TEXTURE2D_DESC td{};
         td.Width = width;
         td.Height = height;
@@ -121,22 +129,28 @@ bool VrBridgeHost::CreateTextures(uint32_t width, uint32_t height, bool tenBit) 
         td.SampleDesc.Count = 1;
         td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
         td.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-        HRESULT hr = m_device->CreateTexture2D(&td, nullptr, &m_textures[i]);
+        HRESULT hr = m_device->CreateTexture2D(&td, nullptr, &newTextures[i]);
         if (FAILED(hr)) {
             RC_LOGE("VR bridge: texture creation failed %s", HResultString(hr).c_str());
+            cleanupNew();
             return false;
         }
-        wchar_t name[64];
-        swprintf_s(name, L"Local\\RinCastVRTex.%u.%lu.%d", generation, GetCurrentProcessId(), i);
+        swprintf_s(newNames[i], L"Local\\RinCastVRTex.%u.%lu.%d", generation, GetCurrentProcessId(), i);
         ComPtr<IDXGIResource1> res;
-        m_textures[i].As(&res);
-        hr = res->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, name,
-                                     &m_textureHandles[i]);
+        newTextures[i].As(&res);
+        hr = res->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, newNames[i],
+                                     &newHandles[i]);
         if (FAILED(hr)) {
             RC_LOGE("VR bridge: CreateSharedHandle failed %s", HResultString(hr).c_str());
+            cleanupNew();
             return false;
         }
-        wcscpy_s(m_shared->textureNames[i], name);
+    }
+    for (int i = 0; i < rcvr::kFrameSlots; i++) {
+        if (m_textureHandles[i]) CloseHandle(m_textureHandles[i]);
+        m_textureHandles[i] = newHandles[i];
+        m_textures[i] = std::move(newTextures[i]);
+        wcscpy_s(m_shared->textureNames[i], newNames[i]);
         m_shared->slots[i].state = rcvr::kSlotFree;
     }
     m_shared->textureWidth = width;

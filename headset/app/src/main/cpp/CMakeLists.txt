@@ -5,7 +5,7 @@ project(rincast-headset CXX C)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(RC_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../../..)
+get_filename_component(RC_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 add_subdirectory(${RC_ROOT}/shared ${CMAKE_CURRENT_BINARY_DIR}/rincast-core)
 
 find_package(OpenXR REQUIRED CONFIG)
@@ -85,7 +85,6 @@ if(NOT RC_PICO_SDK_ACTUAL STREQUAL RC_PICO_SDK_SHA256)
   message(FATAL_ERROR "${RC_PICO_SDK_ZIP} isn't the expected file. Delete it to download it again.")
 endif()
 set(RC_PICO_DIR "${CMAKE_CURRENT_BINARY_DIR}/pico-openxr")
-file(ARCHIVE_EXTRACT INPUT "${RC_PICO_SDK_ZIP}" DESTINATION "${RC_PICO_DIR}" PATTERNS "libs/android.${ANDROID_ABI}/libopenxr_loader.so")
 # The Quest 1 build also carries Meta's loader, from Meta's OpenXR Mobile SDK 64 (Oculus SDK
 # License), downloaded once and checked the same way.
 option(RINCAST_QUEST1 "Also package Meta's OpenXR loader for the Quest 1" OFF)
@@ -103,13 +102,17 @@ if(RINCAST_QUEST1)
     message(FATAL_ERROR "${RC_META_SDK_ZIP} isn't the expected file. Delete it to download it again.")
   endif()
   set(RC_META_DIR "${CMAKE_CURRENT_BINARY_DIR}/meta-openxr")
-  file(ARCHIVE_EXTRACT INPUT "${RC_META_SDK_ZIP}" DESTINATION "${RC_META_DIR}"
-       PATTERNS "OpenXR/Libs/Android/${ANDROID_ABI}/Release/libopenxr_loader.so")
   add_custom_command(TARGET rincast POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RC_META_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E chdir "${RC_META_DIR}" ${CMAKE_COMMAND} -E tar xf "${RC_META_SDK_ZIP}"
+            "OpenXR/Libs/Android/${ANDROID_ABI}/Release/libopenxr_loader.so"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RC_META_DIR}/OpenXR/Libs/Android/${ANDROID_ABI}/Release/libopenxr_loader.so"
             "$<TARGET_FILE_DIR:rincast>/libopenxr_loader_quest1.so")
 endif()
 add_custom_command(TARGET rincast POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RC_OPENXR_LOADER}" "$<TARGET_FILE_DIR:rincast>/libopenxr_loader.so"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${RC_PICO_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E chdir "${RC_PICO_DIR}" ${CMAKE_COMMAND} -E tar xf "${RC_PICO_SDK_ZIP}"
+          "libs/android.${ANDROID_ABI}/libopenxr_loader.so"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RC_PICO_DIR}/libs/android.${ANDROID_ABI}/libopenxr_loader.so"
           "$<TARGET_FILE_DIR:rincast>/libopenxr_loader_pico.so")

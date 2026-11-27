@@ -52,19 +52,24 @@ bool Get(XrInstance instance, const char* name, T& out) {
     return true;
 }
 
+[[maybe_unused]] bool IsPicoDevice() {
+    const std::string manufacturer = Property("ro.product.manufacturer");
+    const std::string brand = Property("ro.product.brand");
+    return (strcasecmp(manufacturer.c_str(), "pico") == 0 ||
+            strcasecmp(manufacturer.c_str(), "bytedance") == 0 ||
+            strcasecmp(brand.c_str(), "pico") == 0 ||
+            strcasecmp(brand.c_str(), "bytedance") == 0);
+}
+
 // PICO's loader on PICO headsets older than the PICO 4 Ultra.
 [[maybe_unused]] bool UsePicoLoader() {
     // The headsets that shipped before PICO OS 5.9 brought the standard loader (as in ALVR).
     // PICO's own loader still works on them after updates, so these always get it; the PICO 4
     // Ultra and anything newer use the standard one. Chinese domestic units report codenames
     // instead of marketing names: the PICO 4 is "Phoenix" (model A8110).
+    if (!IsPicoDevice()) return false;
     const std::string manufacturer = Property("ro.product.manufacturer");
     const std::string brand = Property("ro.product.brand");
-    const bool picoBrand = (strcasecmp(manufacturer.c_str(), "pico") == 0 ||
-                            strcasecmp(manufacturer.c_str(), "bytedance") == 0 ||
-                            strcasecmp(brand.c_str(), "pico") == 0 ||
-                            strcasecmp(brand.c_str(), "bytedance") == 0);
-    if (!picoBrand) return false;
     const std::string model = Property("ro.product.model");
     const std::string product = Property("ro.product.name");
     RC_LOGI("PICO headset: manufacturer '%s', brand '%s', model '%s', product '%s'",
@@ -107,7 +112,7 @@ std::vector<std::string> BuildCandidates() {
         candidates.push_back("/vendor/lib64/libopenxr_loader.so");
     } else {
         candidates.push_back(kKhronos);
-        candidates.push_back(kPico);
+        if (IsPicoDevice()) candidates.push_back(kPico);
         candidates.push_back(kAndroidXr);
         candidates.push_back("/system/lib64/libopenxr_loader.so");
         candidates.push_back("/vendor/lib64/libopenxr_loader.so");

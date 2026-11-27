@@ -71,7 +71,7 @@ void main() {
     vec4 c = texture(uTex, vec2(vUv.x, 1.0 - vUv.y));
     // Clears what's behind by the canvas's coverage (blended with ZERO, ONE_MINUS_SRC_ALPHA).
     if (uHole == 2) { if (c.a < 0.02) discard; oColor = vec4(0.0, 0.0, 0.0, c.a); return; }
-    oColor = vec4(c.rgb * uBrightness, c.a) * uOpacity * m;
+    oColor = vec4(PanelLinearToEye(c.rgb * uBrightness), c.a) * uOpacity * m;
     // Clear parts (around the canvas's rounded card) mustn't hide what's behind them.
     if (oColor.a < 0.02) discard;
 }
@@ -83,10 +83,10 @@ uniform vec4 uCrop;  // visible part of the decoder buffer: offset.xy, scale.zw
 void main() {
     float m = cornerMask();
     if (uHole == 1) { if (m < 0.5) discard; oColor = vec4(0.0); return; }
-    // Video is gamma encoded; linearize because eye buffers are sRGB targets.
+    // Video is gamma encoded; linearize only when eye buffers are sRGB targets.
     vec3 g = texture(uTex, uCrop.xy + vUv * uCrop.zw).rgb;
-    vec4 c = vec4(mix(g / 12.92, pow((g + 0.055) / 1.055, vec3(2.4)), step(0.04045, g)), 1.0);
-    oColor = vec4(c.rgb * uBrightness, 1.0) * uOpacity * m;
+    vec3 rgb = PanelGammaToEye(g);
+    oColor = vec4(rgb * uBrightness, 1.0) * uOpacity * m;
     if (oColor.a < 0.02) discard;
 }
 )";
@@ -455,10 +455,6 @@ out vec4 oColor;
 void main() { oColor = texture(uTex, vUv); }
 )";
 
-static std::string WithExt(const char* fs) {
-    return std::string("#extension GL_OES_EGL_image_external_essl3 : require\n") + kPanelFsCommon + fs;
-}
-
 SceneRenderer::~SceneRenderer() { Shutdown(); }
 
 void SceneRenderer::Shutdown() {
@@ -485,9 +481,15 @@ bool SceneRenderer::Init(bool srgbSwapchain) {
     m_beamVbo = 0;
     m_gridVao = 0;
     m_gridVbo = 0;
-    bool ok = m_panel2D.Build(kPanelVs, (std::string(kPanelFsCommon) + kPanel2DFs).c_str(), "panel2d");
+    const std::string panelColor = srgbSwapchain
+        ? "vec3 PanelLinearToEye(vec3 lin) { return lin; }\n"
+          "vec3 PanelGammaToEye(vec3 g) { return mix(g / 12.92, pow((g + 0.055) / 1.055, vec3(2.4)), step(0.04045, g)); }\n"
+        : "vec3 PanelLinearToEye(vec3 lin) { vec3 c = max(lin, vec3(0.0)); return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }\n"
+          "vec3 PanelGammaToEye(vec3 g) { return g; }\n";
+    bool ok = m_panel2D.Build(kPanelVs, (std::string(kPanelFsCommon) + panelColor + kPanel2DFs).c_str(), "panel2d");
     // GLSL requires #extension before any other statement: build the source with it first.
-    const std::string extFs = WithExt(kPanelExtFs);
+    const std::string extFs = std::string("#extension GL_OES_EGL_image_external_essl3 : require\n") +
+                              kPanelFsCommon + panelColor + kPanelExtFs;
     ok &= m_panelExt.Build(kPanelVs, extFs.c_str(), "panelExt");
     ok &= m_beam.Build(kBeamVs, kBeamFs, "beam");
     ok &= m_dot.Build(kDotVs, kDotFs, "dot");

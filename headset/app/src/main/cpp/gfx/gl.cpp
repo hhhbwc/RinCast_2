@@ -30,7 +30,13 @@ static GLuint Compile(GLenum type, const char* source, const char* name) {
         extensions += body.substr(pos, end - pos) + "\n";
         body.erase(pos, end == std::string::npos ? std::string::npos : end - pos + 1);
     }
-    const std::string full = "#version 310 es\n" + extensions + "precision highp float;\n" + body;
+    static const char* kGlslVersion = [] {
+        GLint major = 3, minor = 0;
+        glGetIntegerv(GL_MAJOR_VERSION, &major);
+        glGetIntegerv(GL_MINOR_VERSION, &minor);
+        return (major > 3 || (major == 3 && minor >= 1)) ? "#version 310 es\n" : "#version 300 es\n";
+    }();
+    const std::string full = std::string(kGlslVersion) + extensions + "precision highp float;\n" + body;
     const char* sources[] = {full.c_str()};
     glShaderSource(s, 1, sources, nullptr);
     glCompileShader(s);
