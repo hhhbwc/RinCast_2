@@ -282,7 +282,9 @@ in vec2 vUv;
 out vec4 oColor;
 void main() {
     vec2 uv = Foveate(vec2(vUv.x, 1.0 - vUv.y), step(0.5, vUv.x));
-    oColor = vec4(texture(uTex, uCrop.xy + uv * uCrop.zw).rgb, 1.0);
+    vec3 c = texture(uTex, uCrop.xy + uv * uCrop.zw).rgb;
+    c = ApplyFoveaDebug(vec2(vUv.x, 1.0 - vUv.y), step(0.5, vUv.x), c);
+    oColor = vec4(c, 1.0);
 }
 )";
 // Snapdragon Game Super Resolution 1, RGBA mode, from Qualcomm's sgsr1_shader_mobile.frag.

@@ -170,7 +170,6 @@ json HeadsetSettings::StreamSettingsJson() const {
             {"vrScale", vrScale},
             {"matchSteamVr", matchSteamVr},
             {"gazeFoveation", gazeFoveation},
-            {"foveaDebug", foveaDebug},
             {"autoConnect", autoConnect},
             {"frameGeneration", frameGeneration},
             {"refreshRate", refreshRate},
