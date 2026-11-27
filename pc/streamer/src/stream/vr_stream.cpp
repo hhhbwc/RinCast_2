@@ -845,9 +845,11 @@ void VrStream::Run() {
             ComPtr<ID3D11ShaderResourceView>& view = motionViews[tex];
             if (!view) {
                 D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
-                sd.Format = desc.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS   ? DXGI_FORMAT_R8G8B8A8_UNORM
-                            : desc.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS ? DXGI_FORMAT_B8G8R8A8_UNORM
-                                                                           : desc.Format;
+                sd.Format = desc.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS      ? DXGI_FORMAT_R8G8B8A8_UNORM
+                            : desc.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS    ? DXGI_FORMAT_B8G8R8A8_UNORM
+                            : desc.Format == DXGI_FORMAT_R10G10B10A2_TYPELESS ? DXGI_FORMAT_R10G10B10A2_UNORM
+                            : desc.Format == DXGI_FORMAT_R16G16B16A16_TYPELESS ? DXGI_FORMAT_R16G16B16A16_FLOAT
+                                                                              : desc.Format;
                 sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                 sd.Texture2D.MipLevels = 1;
                 device->CreateShaderResourceView(tex, &sd, &view);
