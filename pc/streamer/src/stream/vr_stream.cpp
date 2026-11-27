@@ -88,7 +88,7 @@ bool AsyncMotionReadback() {
 // gaze, it sits where each eye's lens is sharpest.
 void VrStream::PlaceFovea(const float fovTan[2][4], float start[2][2]) {
     rc::GazePayload g;
-    int64_t at;
+    int64_t at = 0;
     {
         std::lock_guard lock(m_gazeMutex);
         g = m_gaze;
@@ -96,21 +96,61 @@ void VrStream::PlaceFovea(const float fovTan[2][4], float start[2][2]) {
     }
     const int64_t now = rc::NowNs();
     const int64_t ageNs = at ? (now - at) : 10'000'000'000LL;
-    // 1) Gaze is fresh (< 800 ms): live track the eyes.
+    // 1) Gaze is fresh (< 800 ms): live track the eyes with One-Euro smoothing + CTU macroblock grid alignment.
     // 2) Gaze lost/blinking briefly (800 ms .. 2000 ms): hold last placed fovea, never snap to centre.
-    // 3) Gaze lost for a long time (> 2000 ms): gracefully fall back to lens centre.
+    // 3) Gaze lost for a long time (> 2000 ms): gracefully interpolate back to lens centre over 200 ms.
     const bool fresh = ageNs < 800'000'000LL;
     const bool holdGrace = m_foveaPlaced && (ageNs < 2'000'000'000LL);
+    const bool tracking = fresh && (g.flags != 0);
+
+    const float eyeW = m_config.eyeWidth > 0 ? float(m_config.eyeWidth) : 2048.0f;
+    const float eyeH = m_config.eyeHeight > 0 ? float(m_config.eyeHeight) : 2048.0f;
+    const float fSize = m_config.foveaSize;
+
+    if (tracking) {
+        m_recenterStartNs = 0;
+        m_wasTracking = true;
+    } else if (m_wasTracking && !holdGrace) {
+        if (m_recenterStartNs == 0) {
+            m_recenterStartNs = now;
+            std::memcpy(m_recenterFrom, m_foveaStart, sizeof(m_foveaStart));
+        }
+    }
 
     for (int eye = 0; eye < 2; eye++) {
         // The eye's own gaze, or the other one's while it blinks.
         const int from = (g.flags & (1 << eye)) ? eye : (g.flags & (1 << (1 - eye))) ? 1 - eye : -1;
         if (fresh && from >= 0) {
-            rc::FoveaSquare(fovTan[eye], g.gaze[from], m_config.foveaSize, m_foveaPlaced, m_foveaStart[eye]);
+            float target[2] = {m_foveaStart[eye][0], m_foveaStart[eye][1]};
+            rc::FoveaSquare(fovTan[eye], g.gaze[from], fSize, m_foveaPlaced, target);
+            // One-Euro speed-adaptive filter: minCutoff 1.0 Hz (lock fixation noise), beta 0.5 (fast saccades)
+            float filteredX = target[0], filteredY = target[1];
+            m_foveaFilter[eye].Filter(target[0], target[1], now, 1.0f, 0.5f, 1.0f, filteredX, filteredY);
+
+            // Align foveaStart boundaries to 32px macroblock (CTU) grid
+            float pxX = filteredX * eyeW;
+            float pxY = filteredY * eyeH;
+            float alignedPxX = std::round(pxX / 32.0f) * 32.0f;
+            float alignedPxY = std::round(pxY / 32.0f) * 32.0f;
+            m_foveaStart[eye][0] = std::clamp(alignedPxX / eyeW, 0.0f, 1.0f - fSize);
+            m_foveaStart[eye][1] = std::clamp(alignedPxY / eyeH, 0.0f, 1.0f - fSize);
         } else if (holdGrace) {
             // Blink or brief tracking loss: hold fovea in place to prevent twitching/flicker.
         } else {
-            rc::FoveaSquare(fovTan[eye], nullptr, m_config.foveaSize, m_foveaPlaced, m_foveaStart[eye]);
+            // Lost tracking (> 2000 ms): smooth 200 ms interpolation back to lens centre
+            float center[2] = {};
+            rc::FoveaSquare(fovTan[eye], nullptr, fSize, false, center);
+            if (m_recenterStartNs > 0 && (now - m_recenterStartNs) < 200'000'000LL) {
+                const float t = std::clamp(float(double(now - m_recenterStartNs) / 200'000'000.0), 0.0f, 1.0f);
+                const float s = t * t * (3.0f - 2.0f * t);  // smoothstep
+                m_foveaStart[eye][0] = (1.0f - s) * m_recenterFrom[eye][0] + s * center[0];
+                m_foveaStart[eye][1] = (1.0f - s) * m_recenterFrom[eye][1] + s * center[1];
+            } else {
+                m_foveaStart[eye][0] = center[0];
+                m_foveaStart[eye][1] = center[1];
+                m_foveaFilter[eye].Reset();
+                m_wasTracking = false;
+            }
         }
         start[eye][0] = m_foveaStart[eye][0];
         start[eye][1] = m_foveaStart[eye][1];
@@ -1014,8 +1054,9 @@ void VrStream::RunEncoder() {
             ec.profile = liveProfile;
             ec.tenBit = m_config.tenBit;
             ec.inputFormat = encFormat;
-            // The lens-based bit budget assumes a picture that isn't squeezed.
-            ec.foveated = m_config.foveated && !job.foveated;
+            // Dual-track foveated encoding: Foveator geometric squeeze reduces edge pixels,
+            // while NVENC/AMF QP map simultaneously focuses encoder bit budget onto the fovea.
+            ec.foveated = m_config.foveated;
             ec.adaptiveQuant = m_config.adaptiveQuant;
             ec.twoPass = m_config.twoPass;
             ec.sliceCount = (m_config.sliceCount > 1 && ec.bitrateKbps >= 40000) ? m_config.sliceCount : 1;
@@ -1065,7 +1106,7 @@ void VrStream::RunEncoder() {
             encoder->SetBitrate(encoderKbps);
             appliedKbps = encoderKbps;
         }
-        if (m_config.foveated && !job.foveated) encoder->SetFoveation(job.fovTan);
+        if (m_config.foveated) encoder->SetFoveation(job.fovTan);
         const bool keyframe = m_sender.BeginFrame(*encoder);
         const int64_t encStart = rc::NowNs();
         if (!encoder->Encode(job.yuv.Get(), keyframe, out)) {

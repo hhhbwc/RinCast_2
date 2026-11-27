@@ -48,6 +48,10 @@ float4 ps(V i) : SV_Target {
     float2 o = float2(ux < a.x || ux >= a.x + layout.x ? 0.25 * texel.x / layout.y : 0,
                       uy < a.y || uy >= a.y + layout.x ? 0.25 * texel.y / layout.z : 0);
     if (o.x == 0 && o.y == 0) return src.Sample(samp, uv);
+    if (o.x == 0) return 0.5 * (src.Sample(samp, EyeUv(uv + float2(0, -o.y), eye)) +
+                                 src.Sample(samp, EyeUv(uv + float2(0, o.y), eye)));
+    if (o.y == 0) return 0.5 * (src.Sample(samp, EyeUv(uv + float2(-o.x, 0), eye)) +
+                                 src.Sample(samp, EyeUv(uv + float2(o.x, 0), eye)));
     return 0.25 * (src.Sample(samp, EyeUv(uv + float2(-o.x, -o.y), eye)) +
                    src.Sample(samp, EyeUv(uv + float2(o.x, -o.y), eye)) +
                    src.Sample(samp, EyeUv(uv + float2(-o.x, o.y), eye)) +

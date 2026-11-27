@@ -119,7 +119,9 @@ bool App::Init() {
         if (auto session = m_server.ActiveSession()) session->OnExternalGaze(g);
     });
     m_oscEye.Configure(settings.externalEyeTracking, static_cast<uint16_t>(settings.externalEyeOscPort),
-                       settings.externalEyeInvertX, settings.externalEyeInvertY);
+                       settings.externalEyeInvertX, settings.externalEyeInvertY,
+                       settings.externalEyeOffsetX, settings.externalEyeOffsetY,
+                       settings.externalEyeGainX, settings.externalEyeGainY);
     m_cloud.Start(&m_server);
     steamvr::WatchForcedDriver();
 
@@ -369,10 +371,14 @@ std::string App::ApplySettingSideEffects(const json& changed) {
     }
     if (changed.contains("pcName") || changed.contains("allowRemote") || changed.contains("cloudUrl")) m_cloud.Wake();
     if (changed.contains("externalEyeTracking") || changed.contains("externalEyeOscPort") ||
-        changed.contains("externalEyeInvertX") || changed.contains("externalEyeInvertY")) {
+        changed.contains("externalEyeInvertX") || changed.contains("externalEyeInvertY") ||
+        changed.contains("externalEyeOffsetX") || changed.contains("externalEyeOffsetY") ||
+        changed.contains("externalEyeGainX") || changed.contains("externalEyeGainY")) {
         const Settings s = SettingsStore::Get().Snapshot();
         m_oscEye.Configure(s.externalEyeTracking, static_cast<uint16_t>(s.externalEyeOscPort),
-                           s.externalEyeInvertX, s.externalEyeInvertY);
+                           s.externalEyeInvertX, s.externalEyeInvertY,
+                           s.externalEyeOffsetX, s.externalEyeOffsetY,
+                           s.externalEyeGainX, s.externalEyeGainY);
     }
     if (auto session = m_server.ActiveSession()) {
         session->OnSettingsChanged(changed);

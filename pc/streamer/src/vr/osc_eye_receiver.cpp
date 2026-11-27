@@ -76,14 +76,17 @@ bool ReadOscString(const uint8_t* data, size_t len, size_t& offset, std::string&
     return true;
 }
 
-bool PitchYawToVec(float pitchDeg, float yawDeg, bool invertX, bool invertY, float out[3]) {
+bool PitchYawToVec(float pitchDeg, float yawDeg, bool invertX, bool invertY,
+                   float offsetX, float offsetY, float gainX, float gainY, float out[3]) {
     if (!std::isfinite(pitchDeg) || !std::isfinite(yawDeg)) return false;
-    yawDeg = std::clamp(yawDeg, -55.0f, 55.0f);
-    pitchDeg = std::clamp(pitchDeg, -45.0f, 45.0f);
-    if (invertX) yawDeg = -yawDeg;
-    if (invertY) pitchDeg = -pitchDeg;
-    const float yr = yawDeg * kDegToRad;
-    const float pr = pitchDeg * kDegToRad;
+    const float adjYaw = (yawDeg + offsetX) * gainX;
+    const float adjPitch = (pitchDeg + offsetY) * gainY;
+    float yDeg = std::clamp(adjYaw, -55.0f, 55.0f);
+    float pDeg = std::clamp(adjPitch, -45.0f, 45.0f);
+    if (invertX) yDeg = -yDeg;
+    if (invertY) pDeg = -pDeg;
+    const float yr = yDeg * kDegToRad;
+    const float pr = pDeg * kDegToRad;
     const float x = std::cos(pr) * std::sin(yr);
     const float y = -std::sin(pr);
     const float z = -std::cos(pr) * std::cos(yr);
@@ -112,13 +115,16 @@ bool NormalizeGazeVec(float x, float y, float z, bool invertX, bool invertY, flo
 }
 
 // PaperTracker gaze export v1: tangent-plane angles (tan(yaw), tan(pitch), -1), yaw right, pitch up.
-bool TangentAnglesToVec(float yawDeg, float pitchDeg, bool invertX, bool invertY, float out[3]) {
+bool TangentAnglesToVec(float yawDeg, float pitchDeg, bool invertX, bool invertY,
+                        float offsetX, float offsetY, float gainX, float gainY, float out[3]) {
     if (!std::isfinite(yawDeg) || !std::isfinite(pitchDeg) || std::fabs(yawDeg) >= 89.0f ||
         std::fabs(pitchDeg) >= 89.0f) {
         return false;
     }
-    const float yd = std::clamp(invertX ? -yawDeg : yawDeg, -55.0f, 55.0f) * kDegToRad;
-    const float pd = std::clamp(invertY ? -pitchDeg : pitchDeg, -45.0f, 45.0f) * kDegToRad;
+    const float adjYaw = (yawDeg + offsetX) * gainX;
+    const float adjPitch = (pitchDeg + offsetY) * gainY;
+    const float yd = std::clamp(invertX ? -adjYaw : adjYaw, -55.0f, 55.0f) * kDegToRad;
+    const float pd = std::clamp(invertY ? -adjPitch : adjPitch, -45.0f, 45.0f) * kDegToRad;
     return NormalizeGazeVec(std::tan(yd), std::tan(pd), -1.0f, false, false, out);
 }
 
@@ -146,7 +152,9 @@ void UpdateNormFromGaze(const rc::GazePayload& g, float& outNormX, float& outNor
 bool HandleOscMessage(const uint8_t* data, size_t len, bool invertX, bool invertY,
                       OscEyeParserState& state, rc::GazePayload& outGaze,
                       std::string& outLastAddress, float& outNormX, float& outNormY,
-                      bool& outUpdatedGaze) {
+                      bool& outUpdatedGaze,
+                      float offsetX, float offsetY, float gainX, float gainY) {
+    state.isRepeatedGaze = false;
     size_t offset = 0;
     std::string address;
     if (!ReadOscString(data, len, offset, address)) return false;
@@ -208,25 +216,30 @@ bool HandleOscMessage(const uint8_t* data, size_t len, bool invertX, bool invert
         const uint32_t sequence = ReadBe32(data + 36);
         // Zero is also used by exporters that do not provide frame numbering.
         if (sequence != 0) {
-            if (state.hasPaperTrackerSequence && sequence == state.lastPaperTrackerSequence) return true;
+            if (state.hasPaperTrackerSequence && sequence == state.lastPaperTrackerSequence) {
+                state.isRepeatedGaze = true;
+                return true;
+            }
             state.lastPaperTrackerSequence = sequence;
             state.hasPaperTrackerSequence = true;
+            state.isRepeatedGaze = false;
         } else {
             state.hasPaperTrackerSequence = false;
+            state.isRepeatedGaze = false;
         }
         const uint32_t ptFlags = ReadBe32(data + 36 + 4);
         const bool leftValid = (ptFlags & 1u) != 0;
         const bool rightValid = (ptFlags & 2u) != 0;
         const bool fusedValid = (ptFlags & 4u) != 0;
         rc::GazePayload g{};
-        if (leftValid && TangentAnglesToVec(args[3], args[4], invertX, invertY, g.gaze[0])) {
+        if (leftValid && TangentAnglesToVec(args[3], args[4], invertX, invertY, offsetX, offsetY, gainX, gainY, g.gaze[0])) {
             g.flags |= rc::kGazeLeftValid;
-        } else if (fusedValid && TangentAnglesToVec(args[7], args[8], invertX, invertY, g.gaze[0])) {
+        } else if (fusedValid && TangentAnglesToVec(args[7], args[8], invertX, invertY, offsetX, offsetY, gainX, gainY, g.gaze[0])) {
             g.flags |= rc::kGazeLeftValid;
         }
-        if (rightValid && TangentAnglesToVec(args[5], args[6], invertX, invertY, g.gaze[1])) {
+        if (rightValid && TangentAnglesToVec(args[5], args[6], invertX, invertY, offsetX, offsetY, gainX, gainY, g.gaze[1])) {
             g.flags |= rc::kGazeRightValid;
-        } else if (fusedValid && TangentAnglesToVec(args[7], args[8], invertX, invertY, g.gaze[1])) {
+        } else if (fusedValid && TangentAnglesToVec(args[7], args[8], invertX, invertY, offsetX, offsetY, gainX, gainY, g.gaze[1])) {
             g.flags |= rc::kGazeRightValid;
         }
         if (g.flags == 0) return false;
@@ -265,15 +278,15 @@ bool HandleOscMessage(const uint8_t* data, size_t len, bool invertX, bool invert
 
     if (address == "/tracking/eye/LeftRightPitchYaw" && argCount >= 4) {
         rc::GazePayload g{};
-        if (!PitchYawToVec(args[0], args[1], invertX, invertY, g.gaze[0])) return false;
-        if (!PitchYawToVec(args[2], args[3], invertX, invertY, g.gaze[1])) return false;
+        if (!PitchYawToVec(args[0], args[1], invertX, invertY, offsetX, offsetY, gainX, gainY, g.gaze[0])) return false;
+        if (!PitchYawToVec(args[2], args[3], invertX, invertY, offsetX, offsetY, gainX, gainY, g.gaze[1])) return false;
         g.flags = rc::kGazeLeftValid | rc::kGazeRightValid;
         return emitGaze(g);
     }
 
     if (address == "/tracking/eye/CenterPitchYaw" && argCount >= 2) {
         rc::GazePayload g{};
-        if (!PitchYawToVec(args[0], args[1], invertX, invertY, g.gaze[0])) return false;
+        if (!PitchYawToVec(args[0], args[1], invertX, invertY, offsetX, offsetY, gainX, gainY, g.gaze[0])) return false;
         std::memcpy(g.gaze[1], g.gaze[0], sizeof(g.gaze[0]));
         g.flags = rc::kGazeLeftValid | rc::kGazeRightValid;
         return emitGaze(g);
@@ -313,8 +326,8 @@ bool HandleOscMessage(const uint8_t* data, size_t len, bool invertX, bool invert
         const float rx = state.hasRight ? state.rightX : state.leftX;
         const float ry = state.hasRight ? state.rightY : state.leftY;
         // Normalized [-1, 1] (+Y up) -> VRChat pitch/yaw (+pitch down), so negate Y for pitch.
-        if (!PitchYawToVec(-ly * 35.0f, lx * 45.0f, invertX, invertY, g.gaze[0])) return false;
-        if (!PitchYawToVec(-ry * 35.0f, rx * 45.0f, invertX, invertY, g.gaze[1])) return false;
+        if (!PitchYawToVec(-ly * 35.0f, lx * 45.0f, invertX, invertY, offsetX, offsetY, gainX, gainY, g.gaze[0])) return false;
+        if (!PitchYawToVec(-ry * 35.0f, rx * 45.0f, invertX, invertY, offsetX, offsetY, gainX, gainY, g.gaze[1])) return false;
         g.flags = rc::kGazeLeftValid | rc::kGazeRightValid;
         return emitGaze(g);
     }
@@ -325,7 +338,8 @@ bool HandleOscMessage(const uint8_t* data, size_t len, bool invertX, bool invert
 bool ParsePacketDepth(const uint8_t* data, size_t len, int depth, bool invertX, bool invertY,
                       OscEyeParserState& state, rc::GazePayload& outGaze,
                       std::string& outLastAddress, float& outNormX, float& outNormY,
-                      bool& outUpdatedGaze) {
+                      bool& outUpdatedGaze,
+                      float offsetX, float offsetY, float gainX, float gainY) {
     if (!data || len == 0 || depth > kMaxBundleDepth) return false;
     static constexpr char kBundleTag[8] = {'#', 'b', 'u', 'n', 'd', 'l', 'e', '\0'};
     if (len >= 16 && std::memcmp(data, kBundleTag, 8) == 0) {
@@ -336,7 +350,8 @@ bool ParsePacketDepth(const uint8_t* data, size_t len, int depth, bool invertX, 
             offset += 4;
             if (elemSize == 0 || offset + elemSize > len) break;
             if (ParsePacketDepth(data + offset, elemSize, depth + 1, invertX, invertY, state,
-                                 outGaze, outLastAddress, outNormX, outNormY, outUpdatedGaze)) {
+                                 outGaze, outLastAddress, outNormX, outNormY, outUpdatedGaze,
+                                 offsetX, offsetY, gainX, gainY)) {
                 anyOk = true;
             }
             offset += elemSize;
@@ -344,7 +359,7 @@ bool ParsePacketDepth(const uint8_t* data, size_t len, int depth, bool invertX, 
         return anyOk;
     }
     return HandleOscMessage(data, len, invertX, invertY, state, outGaze, outLastAddress,
-                            outNormX, outNormY, outUpdatedGaze);
+                            outNormX, outNormY, outUpdatedGaze, offsetX, offsetY, gainX, gainY);
 }
 
 }  // namespace
@@ -356,10 +371,15 @@ void OscEyeReceiver::SetCallback(GazeCallback cb) {
     m_callback = std::move(cb);
 }
 
-void OscEyeReceiver::Configure(bool enabled, uint16_t port, bool invertX, bool invertY) {
+void OscEyeReceiver::Configure(bool enabled, uint16_t port, bool invertX, bool invertY,
+                               float offsetX, float offsetY, float gainX, float gainY) {
     std::lock_guard lifecycleLock(m_lifecycleMutex);
     m_invertX.store(invertX, std::memory_order_relaxed);
     m_invertY.store(invertY, std::memory_order_relaxed);
+    m_offsetX.store(offsetX, std::memory_order_relaxed);
+    m_offsetY.store(offsetY, std::memory_order_relaxed);
+    m_gainX.store(gainX, std::memory_order_relaxed);
+    m_gainY.store(gainY, std::memory_order_relaxed);
     if (enabled == m_enabled && (!enabled || port == m_port)) return;
 
     StopLocked();
@@ -407,10 +427,11 @@ OscEyeStatus OscEyeReceiver::Status() const {
 bool OscEyeReceiver::ParsePacket(const uint8_t* data, size_t len, bool invertX, bool invertY,
                                  OscEyeParserState& state, rc::GazePayload& outGaze,
                                  std::string& outLastAddress, float& outNormX, float& outNormY,
-                                 bool& outUpdatedGaze) {
+                                 bool& outUpdatedGaze,
+                                 float offsetX, float offsetY, float gainX, float gainY) {
     outUpdatedGaze = false;
     return ParsePacketDepth(data, len, 0, invertX, invertY, state, outGaze, outLastAddress,
-                            outNormX, outNormY, outUpdatedGaze);
+                            outNormX, outNormY, outUpdatedGaze, offsetX, offsetY, gainX, gainY);
 }
 
 void OscEyeReceiver::WorkerLoop(uint16_t port) {
@@ -498,7 +519,11 @@ void OscEyeReceiver::WorkerLoop(uint16_t port) {
         const bool ok = ParsePacket(buf, size_t(n),
                                     m_invertX.load(std::memory_order_relaxed),
                                     m_invertY.load(std::memory_order_relaxed),
-                                    parserState, gaze, lastAddr, normX, normY, updatedGaze);
+                                    parserState, gaze, lastAddr, normX, normY, updatedGaze,
+                                    m_offsetX.load(std::memory_order_relaxed),
+                                    m_offsetY.load(std::memory_order_relaxed),
+                                    m_gainX.load(std::memory_order_relaxed),
+                                    m_gainY.load(std::memory_order_relaxed));
         if (ok && updatedGaze) {
             ++ratePackets;
             GazeCallback cb;
@@ -513,21 +538,25 @@ void OscEyeReceiver::WorkerLoop(uint16_t port) {
             m_status.lastNormY = normY;
             if (!lastAddr.empty()) m_status.lastAddress = lastAddr;
             m_lastValidNs = nowNs;
-        } else if (ok) {
-            // Valid OSC packet (e.g. repeated sequence on stationary fixation or blink parameter):
-            // keep heartbeat alive and maintain downstream gaze so watchdog does not starve.
+        } else if (ok && parserState.isRepeatedGaze && parserState.hasValidGaze) {
+            // Valid repeated PaperTracker gaze sequence (stationary fixation):
+            // safely invoke callback OUTSIDE status lock and keep heartbeat alive
+            GazeCallback cb;
+            {
+                std::lock_guard cbLock(m_cbMutex);
+                cb = m_callback;
+            }
+            if (cb) cb(parserState.lastValidGaze);
             std::lock_guard lock(m_statusMutex);
             m_status.active = true;
             if (!lastAddr.empty()) m_status.lastAddress = lastAddr;
             m_lastValidNs = nowNs;
-            if (parserState.hasValidGaze) {
-                GazeCallback cb;
-                {
-                    std::lock_guard cbLock(m_cbMutex);
-                    cb = m_callback;
-                }
-                if (cb) cb(parserState.lastValidGaze);
-            }
+        } else if (ok) {
+            // Other valid OSC packets (e.g. eye openness or avatar parameters):
+            // record active and address, but DO NOT refresh gaze timestamp or re-emit stale gaze.
+            std::lock_guard lock(m_statusMutex);
+            m_status.active = true;
+            if (!lastAddr.empty()) m_status.lastAddress = lastAddr;
         } else if (!ok) {
             std::lock_guard lock(m_statusMutex);
             ++m_status.unrecognizedPackets;

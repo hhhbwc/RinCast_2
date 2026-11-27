@@ -159,31 +159,31 @@ void App::Init() {
         return;
     }
     RC_LOGI("Headset family: %s", m_headset->Family());
+    const char* rawRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    std::string renderer = rawRenderer ? rawRenderer : "";
+    std::string rLow = renderer;
+    std::transform(rLow.begin(), rLow.end(), rLow.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    std::string platform = SystemProperty("ro.board.platform");
+    std::transform(platform.begin(), platform.end(), platform.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    const auto hasR = [&](const char* s) { return rLow.find(s) != std::string::npos; };
+    const auto hasP = [&](const char* s) { return platform.find(s) != std::string::npos; };
+    const bool lowGpu = hasR("adreno (tm) 5") || hasR("adreno 5") ||
+                        hasR("adreno (tm) 61") || hasR("adreno 61") ||
+                        hasR("adreno (tm) 62") || hasR("adreno 62") ||
+                        hasR("adreno (tm) 63") || hasR("adreno 63") ||
+                        hasR("adreno (tm) 64") || hasR("adreno 64") ||
+                        hasR("mali-g5") || hasR("mali-g72") || hasR("mali-g76") || hasR("mali-t") ||
+                        hasR("powervr") || hasR("swiftshader") ||
+                        hasP("msm8998") || hasP("sdm845") || hasP("sda845") ||
+                        hasP("rk35") || hasP("mt67");
+    const bool highGpu = hasR("adreno (tm) 73") || hasR("adreno (tm) 74") || hasR("adreno (tm) 75") ||
+                         hasR("adreno (tm) 76") || hasR("adreno (tm) 8") ||
+                         hasR("adreno 73") || hasR("adreno 74") || hasR("adreno 75") || hasR("adreno 8") ||
+                         hasR("immortalis-g7") || hasR("immortalis-g9");
+    m_gpuTier = lowGpu ? "Low" : highGpu ? "High" : "Mid";
+
     if (firstRun) {
-        const char* rawRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-        std::string renderer = rawRenderer ? rawRenderer : "";
-        std::string rLow = renderer;
-        std::transform(rLow.begin(), rLow.end(), rLow.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-        std::string platform = SystemProperty("ro.board.platform");
-        std::transform(platform.begin(), platform.end(), platform.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-        const auto hasR = [&](const char* s) { return rLow.find(s) != std::string::npos; };
-        const auto hasP = [&](const char* s) { return platform.find(s) != std::string::npos; };
-        const bool lowGpu = hasR("adreno (tm) 5") || hasR("adreno 5") ||
-                            hasR("adreno (tm) 61") || hasR("adreno 61") ||
-                            hasR("adreno (tm) 62") || hasR("adreno 62") ||
-                            hasR("adreno (tm) 63") || hasR("adreno 63") ||
-                            hasR("adreno (tm) 64") || hasR("adreno 64") ||
-                            hasR("mali-g5") || hasR("mali-g72") || hasR("mali-g76") || hasR("mali-t") ||
-                            hasR("powervr") || hasR("swiftshader") ||
-                            hasP("msm8998") || hasP("sdm845") || hasP("sda845") ||
-                            hasP("rk35") || hasP("mt67");
-        const bool highGpu = hasR("adreno (tm) 73") || hasR("adreno (tm) 74") || hasR("adreno (tm) 75") ||
-                             hasR("adreno (tm) 76") || hasR("adreno (tm) 8") ||
-                             hasR("adreno 73") || hasR("adreno 74") || hasR("adreno 75") || hasR("adreno 8") ||
-                             hasR("immortalis-g7") || hasR("immortalis-g9");
-        const char* tier = "mid";
         if (lowGpu) {
-            tier = "low";
             m_settings.SetVrScale(0.6f);
             m_settings.vrSharpen = 0.0f;
             m_settings.upscaling = false;
@@ -191,7 +191,6 @@ void App::Init() {
             m_settings.refreshRate = 72.f;
             m_settings.vrBitrateMbps = 60;
         } else if (highGpu) {
-            tier = "high";
             m_settings.SetVrScale(0.9f);
             m_settings.vrSharpen = 0.45f;
             m_settings.refreshRate = 90.f;
@@ -201,7 +200,7 @@ void App::Init() {
             m_settings.refreshRate = 72.f;
         }
         RC_LOGI("First-run hardware tier: %s (renderer='%s', platform='%s') -> scale=%.2f sharpen=%.2f fps=%.0f bitrate=%d",
-                tier, renderer.c_str(), platform.c_str(), m_settings.vrScale, m_settings.vrSharpen,
+                m_gpuTier.c_str(), renderer.c_str(), platform.c_str(), m_settings.vrScale, m_settings.vrSharpen,
                 m_settings.refreshRate, m_settings.vrBitrateMbps);
         SaveSettings();
     }
@@ -2671,6 +2670,7 @@ void App::LatchVideo(const FrameState& frame, bool late) {
             const float effectiveVibrance = std::clamp(m_settings.vrVibrance, 0.0f, 0.5f);
             const float effectiveDarkGamma = std::clamp(m_settings.vrDarkGamma, 0.0f, 0.35f);
             m_scene.SetVrImageAdjust(effectiveSharpen, effectiveVibrance, effectiveDarkGamma);
+            m_scene.SetFoveaDebug(m_forceFoveaDebug == 1 || (m_forceFoveaDebug == 2 && m_settings.foveaDebug));
             if (m_vrUpscaled) {
                 m_scene.KeepVideo(texture.texture, texture.crop, m_vrEyeWidth * 2, m_vrEyeHeight, foveation);
                 m_scene.DrawKeptUpscaled(fbo, m_vrSwapchain.width, m_vrSwapchain.height);
@@ -2896,6 +2896,14 @@ void App::LatchVideo(const FrameState& frame, bool late) {
                     m_forceFoveation = v;
                     RC_LOGI("Debug force_foveation: %d (0 off, 1 on, 2 follow settings)", v);
                     m_client.SendControl({{"type", rc::msg::kUpdateSettings}, {"settings", StreamSettingsForPc()}});
+                }
+            }
+            {
+                const long parsed = readSwitch("force_fovea_debug.txt");
+                const int v = (parsed == 0 || parsed == 1) ? int(parsed) : 2;
+                if (v != m_forceFoveaDebug) {
+                    m_forceFoveaDebug = v;
+                    RC_LOGI("Debug force_fovea_debug: %d (0 off, 1 on, 2 follow settings)", v);
                 }
             }
             {
@@ -3566,6 +3574,15 @@ void App::CreateWindows() {
     if (!m_settings.manualPc.empty()) SetManualPc(m_settings.manualPc);
     rc::NetAddress lastAddress;
     if (rc::NetAddress::Parse(m_settings.lastPcAddress, rc::kDiscoveryPort, lastAddress)) m_discovery.AddProbeTarget(lastAddress);
+}
+
+std::string App::CompatibilityDiagnostic() const {
+    const char* loader = xrloader::Name();
+    const char* family = m_headset ? m_headset->Family() : "?";
+    return rc::StrFormat("%s | %s | %s | Tier:%s",
+                         family, loader ? loader : "OpenXR",
+                         m_xr.IsSrgbSwapchain() ? "sRGB" : "RGBA8",
+                         m_gpuTier.empty() ? "Mid" : m_gpuTier.c_str());
 }
 
 }  // namespace rv

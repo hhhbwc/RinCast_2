@@ -27,6 +27,7 @@ struct HeadsetSettings {
     bool vrScaleOfPanel = true;         // false: vrScale is still against the recommended size (before 1.2.0)
     bool matchSteamVr = false;          // stream at the resolution SteamVR renders at instead
     bool gazeFoveation = false;         // foveated encoding: full detail only where the eyes look
+    bool foveaDebug = false;            // show fovea debug box & crosshair in headset
     std::string vrQuality = "high";     // the preset nearest vrScale, for PCs before 1.1.0
     float refreshRate = 72;  // ROUND18 L4: conservative default; saved settings win on load
     std::string codec = "auto";         // auto | hevc | av1 | h264

@@ -88,7 +88,9 @@ class VrStream {
     void SetGaze(const rc::GazePayload& gaze) {
         std::lock_guard lock(m_gazeMutex);
         m_gaze = gaze;
-        m_gazeNs = rc::NowNs();
+        if (gaze.flags != 0) {
+            m_gazeNs = rc::NowNs();
+        }
     }
     VideoSenderStats Stats() {
         VideoSenderStats s = m_sender.Stats();
@@ -297,6 +299,66 @@ class VrStream {
     std::mutex m_gazeMutex;
     rc::GazePayload m_gaze{};
     int64_t m_gazeNs = 0;
+    struct OneEuroFilter2D {
+        float x = 0.5f, y = 0.5f;
+        float dx = 0.0f, dy = 0.0f;
+        int64_t lastNs = 0;
+        bool initialized = false;
+
+        void Reset() {
+            initialized = false;
+            dx = dy = 0.0f;
+            lastNs = 0;
+        }
+
+        void Filter(float inX, float inY, int64_t nowNs, float minCutoffHz, float beta, float dCutoffHz,
+                    float& outX, float& outY) {
+            if (!initialized) {
+                x = inX;
+                y = inY;
+                dx = dy = 0.0f;
+                lastNs = nowNs;
+                initialized = true;
+                outX = x;
+                outY = y;
+                return;
+            }
+            const float dt = float(double(nowNs - lastNs) / 1e9);
+            lastNs = nowNs;
+            if (dt <= 0.0001f || dt > 0.5f) {
+                x = inX;
+                y = inY;
+                dx = dy = 0.0f;
+                outX = x;
+                outY = y;
+                return;
+            }
+            auto alpha = [](float rate, float cutoff) {
+                const float tau = 1.0f / (2.0f * 3.14159265f * cutoff);
+                return 1.0f / (1.0f + tau * rate);
+            };
+            const float rate = 1.0f / dt;
+            const float alphaD = alpha(rate, dCutoffHz);
+            const float curDx = (inX - x) / dt;
+            const float curDy = (inY - y) / dt;
+            dx = alphaD * curDx + (1.0f - alphaD) * dx;
+            dy = alphaD * curDy + (1.0f - alphaD) * dy;
+            const float speed = std::sqrt(dx * dx + dy * dy);
+
+            const float cutoff = minCutoffHz + beta * speed;
+            const float alphaPos = alpha(rate, cutoff);
+            x = alphaPos * inX + (1.0f - alphaPos) * x;
+            y = alphaPos * inY + (1.0f - alphaPos) * y;
+            outX = x;
+            outY = y;
+        }
+    };
+
+    OneEuroFilter2D m_foveaFilter[2];
+    int64_t m_recenterStartNs = 0;
+    float m_recenterFrom[2][2] = {};
+    bool m_wasTracking = false;
+
     float m_foveaStart[2][2] = {};  // encoding thread only
     bool m_foveaPlaced = false;
     // A18: the motion grid of the frame before - the state of the quantizer's Schmidt

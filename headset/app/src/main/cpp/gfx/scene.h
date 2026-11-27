@@ -58,6 +58,8 @@ class SceneRenderer {
         m_vrVibrance = vibrance;
         m_vrDarkGamma = darkGamma;
     }
+    void SetFoveaDebug(bool debug) { m_foveaDebug = debug; }
+    bool FoveaDebug() const { return m_foveaDebug; }
     bool UpscalerReady() const { return m_upscalerReady; }
     // Keeps a width x height video frame as a normal texture, gamma-encoded, then draws it to dstFbo:
     void KeepVideo(GLuint texture, const float* crop, int width, int height, const VideoFoveation* foveation = nullptr);
@@ -89,7 +91,8 @@ class SceneRenderer {
     float m_vrSharpen = 0.0f;
     float m_vrVibrance = 0.0f;
     float m_vrDarkGamma = 0.0f;
-    bool m_rawSrgbWrites = false;  // GL_EXT_sRGB_write_control: video goes into sRGB images as it is
+    bool m_rawSrgbWrites = false;
+    bool m_foveaDebug = false;  // GL_EXT_sRGB_write_control: video goes into sRGB images as it is
     GLuint m_gsrTexture = 0, m_gsrFbo = 0;
     int m_gsrWidth = 0, m_gsrHeight = 0;
     GLuint m_gridVao = 0, m_gridVbo = 0;

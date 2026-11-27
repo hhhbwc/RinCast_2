@@ -133,6 +133,10 @@ struct Settings {
     int externalEyeOscPort = 9945;
     bool externalEyeInvertX = false;
     bool externalEyeInvertY = false;
+    float externalEyeOffsetX = 0.0f;  // [-20.0, 20.0] degrees
+    float externalEyeOffsetY = 0.0f;  // [-20.0, 20.0] degrees
+    float externalEyeGainX = 1.0f;    // [0.2, 3.0] scale multiplier
+    float externalEyeGainY = 1.0f;    // [0.2, 3.0] scale multiplier
 
     // Cloud
     std::string cloudUrl = "https://rincast.com";

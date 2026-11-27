@@ -39,6 +39,7 @@ struct OscEyeParserState {
     bool hasValidGaze = false;
     uint32_t lastPaperTrackerSequence = 0;
     bool hasPaperTrackerSequence = false;
+    bool isRepeatedGaze = false;
 };
 
 class OscEyeReceiver {
@@ -52,7 +53,8 @@ class OscEyeReceiver {
     OscEyeReceiver& operator=(const OscEyeReceiver&) = delete;
 
     void SetCallback(GazeCallback cb);
-    void Configure(bool enabled, uint16_t port, bool invertX, bool invertY);
+    void Configure(bool enabled, uint16_t port, bool invertX, bool invertY,
+                   float offsetX = 0.0f, float offsetY = 0.0f, float gainX = 1.0f, float gainY = 1.0f);
     void Stop();
 
     OscEyeStatus Status() const;
@@ -61,7 +63,8 @@ class OscEyeReceiver {
     static bool ParsePacket(const uint8_t* data, size_t len, bool invertX, bool invertY,
                             OscEyeParserState& state, rc::GazePayload& outGaze,
                             std::string& outLastAddress, float& outNormX, float& outNormY,
-                            bool& outUpdatedGaze);
+                            bool& outUpdatedGaze,
+                            float offsetX = 0.0f, float offsetY = 0.0f, float gainX = 1.0f, float gainY = 1.0f);
 
    private:
     void WorkerLoop(uint16_t port);
@@ -74,6 +77,10 @@ class OscEyeReceiver {
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_invertX{false};
     std::atomic<bool> m_invertY{false};
+    std::atomic<float> m_offsetX{0.0f};
+    std::atomic<float> m_offsetY{0.0f};
+    std::atomic<float> m_gainX{1.0f};
+    std::atomic<float> m_gainY{1.0f};
     bool m_enabled = false;
     uint16_t m_port = 9945;
     std::thread m_thread;

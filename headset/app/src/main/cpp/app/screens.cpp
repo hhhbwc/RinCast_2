@@ -722,6 +722,8 @@ bool PageVrQuality(Ui& ui, const Rect& body) {
         changed |= CheckRow(ui, c, "face", Tr("vr.faceTracking"), s.faceTracking, device.FaceHint());
     changed |= CheckRow(ui, c, "foveated", Tr("vr.foveated"), s.gazeFoveation,
                         Tr(app.GazeSupported() ? "vr.foveatedHint" : "vr.foveatedFixedHint"));
+    changed |= CheckRow(ui, c, "foveadebug", Tr("vr.foveaDebug"), s.foveaDebug,
+                        Tr("vr.foveaDebugHint"));
     // Hand the measured content height to the next frame for the scroll range.
     contentBottom = std::max(l.y, c.y) + scroll;
     ui.EndScroll();
@@ -1480,6 +1482,8 @@ void BuildStats(Ui& ui, const Rect& r) {
         R.RectFill({r.x + 22, y + 25, std::max(w, 2.f), 4}, ms == biggest ? kAccent : kEdge, 2);
         y += 40;
     }
+    y += 8;
+    R.Text(app.CompatibilityDiagnostic(), r.x + 22, y, 14, kMuted);
 }
 
 // ---- Notices ---------------------------------------------------------------------------
@@ -1597,7 +1601,7 @@ void Build(App& app, WindowManager& wm) {
     kb->showChrome = false;
     // 640 (was 600): the frame-generation row (TASK-OPLOGIC-FIX-HMD-2026-11-22 §1.1) added a
     // 38 px row, and the stage list below already ended at the old bottom edge.
-    Window* stats = make("stats", 380, 724, 0.30f, false, BuildStats);
+    Window* stats = make("stats", 380, 756, 0.30f, false, BuildStats);
     stats->showChrome = true;
     Window* notices = make("notices", 800, 104, 0.68f, false, BuildNotices);
     notices->showChrome = false;

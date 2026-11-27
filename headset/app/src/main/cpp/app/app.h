@@ -149,6 +149,7 @@ class App {
     const std::vector<MonitorInfo>& Monitors() const { return m_monitors; }
     std::string VrStateText() const;
     bool VrRunning() const { return m_vrState == "running"; }
+    std::string CompatibilityDiagnostic() const;
     const std::deque<Notice>& Notices() const { return m_notices; }
     struct Stats {
         double fps = 0, generatedFps = 0, generatedRejectedFps = 0, latencyMs = 0, decodeMs = 0, mbps = 0, rttMs = 0;
@@ -412,8 +413,10 @@ class App {
     // ROUND20 L17: the diagnostics switch panel (files/ switches, polled once a second).
     int m_forceEncodeScale = 0;       // force_encode_scale.txt: 0 off, else 50-100
     int m_forceFoveation = 2;         // force_foveation.txt: 0 off, 1 on, 2 follow settings
+    int m_forceFoveaDebug = 2;        // force_fovea_debug.txt: 0 off, 1 on, 2 follow settings
     int m_forceRefresh = 0;           // force_refresh.txt: 0 off, else 72/90
     bool m_decodeQuantiles = false;   // decode_stats.txt: decode p50/p95 in the diag line
+    std::string m_gpuTier = "mid";
     // TASK-DEC-PERCENTILE-2026-11-20 §1.3: per-frame decode costs from the VR decoder's
     // output thread; Percentile() feeds the diag line's dec p50/p95 (no more -1.0/-1.0
     // placeholder) and the debug-gated 1 Hz line. Reset rides the 5 s flow window.

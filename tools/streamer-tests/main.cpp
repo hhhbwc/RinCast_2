@@ -2066,7 +2066,22 @@ void TestOscEyeReceiverAndSettings() {
         auto ptRepeated = buildPtV1(1, 0x3u, 500, -30.0f, -20.0f, -30.0f, -20.0f, -30.0f, -20.0f);
         CHECK(rcs::OscEyeReceiver::ParsePacket(ptRepeated.data(), ptRepeated.size(), false, false, state, g, lastAddr, nx, ny, updated));
         CHECK(!updated);
+        CHECK(state.isRepeatedGaze);
         CHECK(g.gaze[0][0] > 0.4f && g.gaze[0][1] > 0.25f);
+
+        // Test offset and gain adjustment
+        {
+            rcs::OscEyeParserState offsetState;
+            rc::GazePayload og{};
+            std::string oAddr;
+            float onx = 0.f, ony = 0.f;
+            bool oUpdated = false;
+            auto ptOffset = buildPtV1(10, 0x3u, 500, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+            CHECK(rcs::OscEyeReceiver::ParsePacket(ptOffset.data(), ptOffset.size(), false, false, offsetState, og, oAddr, onx, ony, oUpdated,
+                                                   5.0f, -3.0f, 1.2f, 1.0f));
+            CHECK(oUpdated);
+            CHECK(og.gaze[0][0] > 0.05f);  // yaw adjusted to +6.0 deg -> gaze[0][0] > 0
+        }
 
         // Fused-only fallback when left/right valid bits are 0
         auto pt2 = buildPtV1(2, 0x4u, 500, 0.0f, 0.0f, 0.0f, 0.0f, -25.0f, -15.0f);

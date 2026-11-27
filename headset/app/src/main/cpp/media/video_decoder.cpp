@@ -322,9 +322,7 @@ bool VideoDecoder::Configure(const std::vector<uint8_t>& keyframe) {
         return false;
     }
     m_consecutiveInputStalls = 0;
-    const int64_t startNs = rc::NowNs();
-    m_lastInputQueuedNs.store(0, std::memory_order_relaxed);
-    m_lastOutputDecodedNs.store(startNs, std::memory_order_relaxed);
+    m_pendingSinceNs.store(0, std::memory_order_relaxed);
     m_configured = true;
     m_failed = false;  // a later keyframe got it going after all
     m_outputThread = std::thread([this] { OutputLoop(); });
@@ -412,7 +410,8 @@ void VideoDecoder::InputLoop() {
         }
         m_consecutiveInputStalls = 0;
         const int64_t queuedNs = rc::NowNs();
-        m_lastInputQueuedNs.store(queuedNs, std::memory_order_relaxed);
+        int64_t expected = 0;
+        m_pendingSinceNs.compare_exchange_strong(expected, queuedNs, std::memory_order_relaxed);
         {
             std::lock_guard lock(m_statsMutex);
             m_inputTimes[int64_t(p.frameIndex)] = queuedNs;
@@ -429,7 +428,7 @@ void VideoDecoder::OutputLoop() {
         const ssize_t index = AMediaCodec_dequeueOutputBuffer(m_codecHandle, &info, 10000);
         if (index >= 0) {
             const int64_t now = rc::NowNs();
-            m_lastOutputDecodedNs.store(now, std::memory_order_relaxed);
+            m_pendingSinceNs.store(0, std::memory_order_relaxed);
             double frameDecodeMs = -1;
             {
                 std::lock_guard lock(m_statsMutex);
@@ -477,11 +476,12 @@ void VideoDecoder::OutputLoop() {
             }
         } else if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
             const int64_t now = rc::NowNs();
-            const int64_t lastIn = m_lastInputQueuedNs.load(std::memory_order_relaxed);
-            const int64_t lastOut = m_lastOutputDecodedNs.load(std::memory_order_relaxed);
-            if (lastIn > 0 && lastOut > 0 && (now - lastIn) < 500'000'000LL && (now - lastOut) > 2'000'000'000LL) {
+            const int64_t pendingSince = m_pendingSinceNs.load(std::memory_order_relaxed);
+            if (pendingSince > 0 && (now - pendingSince) > 2'000'000'000LL) {
                 Fail("decoder stalled (no output frames for 2s)",
-                     rc::StrFormat("queuedFrame=%u decoded=%u", m_lastQueued.load(), m_decoded.load()).c_str());
+                     rc::StrFormat("queuedFrame=%u decoded=%u pendingMs=%lld", m_lastQueued.load(), m_decoded.load(),
+                                   static_cast<long long>(rc::NsToMs(now - pendingSince)))
+                         .c_str());
                 break;
             }
         } else if (index != AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) {

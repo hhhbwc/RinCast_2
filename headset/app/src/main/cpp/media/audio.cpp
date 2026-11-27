@@ -292,6 +292,11 @@ bool MicCapture::Start(PacketSink sink) {
     m_rate = int(rc::kAudioSampleRate);
     m_channels = 1;
     m_float = false;
+    m_hpfPrevIn = 0.f;
+    m_hpfPrevOut = 0.f;
+    m_noiseFloor = 0.004f;
+    m_gateGain = 1.f;
+    m_gateHoldFrames = 0;
     RC_LOGI("Microphone: 48 kHz mono through PulseAudio");
     m_running = true;
     m_thread = std::thread([this] { Run(); });

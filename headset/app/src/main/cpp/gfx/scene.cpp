@@ -154,6 +154,7 @@ void main() {
 // squeezed frame. uv over both eyes side by side, y from the top.
 static const char* kFoveateFs = R"(
 uniform int uFoveated;
+uniform int uFoveaDebug;
 uniform vec4 uFoveaStart;   // left eye x, y, right eye x, y
 uniform vec3 uFoveaLayout;  // size, density x, density y
 float FoveaAxis(float u, float a, float s) {
@@ -166,6 +167,24 @@ vec2 Foveate(vec2 uv, float eye) {
     vec2 a = eye < 0.5 ? uFoveaStart.xy : uFoveaStart.zw;
     float x = FoveaAxis(uv.x * 2.0 - eye, a.x, uFoveaLayout.y);
     return vec2((x + eye) * 0.5, FoveaAxis(uv.y, a.y, uFoveaLayout.z));
+}
+vec3 ApplyFoveaDebug(vec2 fullUv, float eye, vec3 col) {
+    if (uFoveaDebug == 0 || uFoveated == 0) return col;
+    vec2 a = eye < 0.5 ? uFoveaStart.xy : uFoveaStart.zw;
+    float F = uFoveaLayout.x;
+    vec2 p = vec2(fullUv.x * 2.0 - eye, fullUv.y);
+    bool inX = (p.x >= a.x && p.x <= a.x + F);
+    bool inY = (p.y >= a.y && p.y <= a.y + F);
+    float dx = min(abs(p.x - a.x), abs(p.x - (a.x + F)));
+    float dy = min(abs(p.y - a.y), abs(p.y - (a.y + F)));
+    bool border = (inX && dy < 0.003) || (inY && dx < 0.003);
+    vec2 c = a + vec2(F * 0.5);
+    bool cross = (abs(p.x - c.x) < 0.002 && abs(p.y - c.y) < 0.025) ||
+                 (abs(p.y - c.y) < 0.002 && abs(p.x - c.x) < 0.025);
+    if (border || cross) {
+        return mix(col, vec3(0.1, 1.0, 0.3), 0.75);
+    }
+    return col;
 }
 )";
 static const char* kColorGradeFs = R"(
@@ -251,6 +270,7 @@ void main() {
     vec2 uv = Foveate(vec2(vUv.x, 1.0 - vUv.y), step(0.5, vUv.x));
     vec3 g = ApplyCasExt(uv, uCrop, uInvTexSize, uSharpen);
     g = ColorGrade(g);
+    g = ApplyFoveaDebug(vec2(vUv.x, 1.0 - vUv.y), step(0.5, vUv.x), g);
     oColor = vec4(ToLayer(g), 1.0);
 }
 )";
@@ -358,6 +378,7 @@ out vec4 oColor;
 void main() {
     vec3 g = ApplyCas2D(uTex, vUv, uInvTexSize, uSharpen);
     g = ColorGrade(g);
+    g = ApplyFoveaDebug(vec2(vUv.x, 1.0 - vUv.y), step(0.5, vUv.x), g);
     oColor = vec4(ToLayer(g), 1.0);
 }
 )";
@@ -396,6 +417,7 @@ void main() {
         ? ApplyCas2D(uTex, vec2(uv.x, 1.0 - uv.y), uInvTexSize, uSharpen)
         : texture(uTex, vec2(uv.x, 1.0 - uv.y)).rgb;
     g = ColorGrade(g);
+    g = ApplyFoveaDebug(vec2(vUv.x, 1.0 - vUv.y), step(0.5, vUv.x), g);
     oColor = vec4(ToLayer(g), 1.0);
 }
 )";
@@ -445,6 +467,7 @@ void main() {
         ? ApplyCasExtAt(sampleUv, casLo, casHi, uInvTexSize * uCrop.zw, uSharpen)
         : texture(uTex, sampleUv).rgb;
     g = ColorGrade(g);
+    g = ApplyFoveaDebug(vec2(vUv.x, 1.0 - vUv.y), step(0.5, vUv.x), g);
     oColor = vec4(ToLayer(g), 1.0);
 }
 )";
@@ -630,8 +653,9 @@ static void DiscardTarget() {
 }
 
 // The squeeze of a foveated VR frame, or none.
-static void SetFoveation(const Program& p, const VideoFoveation* f) {
+static void SetFoveation(const Program& p, const VideoFoveation* f, bool debug = false) {
     glUniform1i(p.Uniform("uFoveated"), f ? 1 : 0);
+    glUniform1i(p.Uniform("uFoveaDebug"), (f && debug) ? 1 : 0);
     if (!f) return;
     glUniform4f(p.Uniform("uFoveaStart"), f->start[0][0], f->start[0][1], f->start[1][0], f->start[1][1]);
     glUniform3f(p.Uniform("uFoveaLayout"), f->size, f->density[0], f->density[1]);
@@ -650,7 +674,7 @@ void SceneRenderer::BlitExternal(GLuint dstFbo, GLuint texture, int width, int h
     m_blitExt.Use();
     glUniform4f(m_blitExt.Uniform("uRect"), u0, v0, u1, v1);
     glUniform4fv(m_blitExt.Uniform("uCrop"), 1, crop ? crop : kFull);
-    SetFoveation(m_blitExt, foveation);
+    SetFoveation(m_blitExt, foveation, m_foveaDebug);
     const float tw = srcWidth > 0 ? float(srcWidth) : float(width);
     const float th = srcHeight > 0 ? float(srcHeight) : float(height);
     glUniform2f(m_blitExt.Uniform("uInvTexSize"), tw > 0 ? 1.0f / tw : 0.0f, th > 0 ? 1.0f / th : 0.0f);
@@ -691,7 +715,7 @@ void SceneRenderer::KeepVideo(GLuint texture, const float* crop, int width, int 
     m_blitExtGamma.Use();
     glUniform4f(m_blitExtGamma.Uniform("uRect"), 0, 0, 1, 1);
     glUniform4fv(m_blitExtGamma.Uniform("uCrop"), 1, crop ? crop : kFull);
-    SetFoveation(m_blitExtGamma, foveation);
+    SetFoveation(m_blitExtGamma, foveation, m_foveaDebug);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture);
     glUniform1i(m_blitExtGamma.Uniform("uTex"), 0);
@@ -798,7 +822,7 @@ bool SceneRenderer::DrawExternalMoved(GLuint dstFbo, int dstW, int dstH, float s
     m_externalMoved.Use();
     glUniform4f(m_externalMoved.Uniform("uRect"), 0, 0, 1, 1);
     glUniform4fv(m_externalMoved.Uniform("uCrop"), 1, m_externalCrop);
-    SetFoveation(m_externalMoved, m_externalFoveated ? &m_externalFoveation : nullptr);
+    SetFoveation(m_externalMoved, m_externalFoveated ? &m_externalFoveation : nullptr, m_foveaDebug);
     glUniform2f(m_externalMoved.Uniform("uInvTexSize"), m_externalWidth > 0 ? 1.f / m_externalWidth : 0.f,
                 m_externalHeight > 0 ? 1.f / m_externalHeight : 0.f);
     glUniform1f(m_externalMoved.Uniform("uSharpen"), m_vrSharpen);

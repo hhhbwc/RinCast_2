@@ -61,6 +61,10 @@ json Settings::ToJson(bool forUi) const {
         {"externalEyeOscPort", externalEyeOscPort},
         {"externalEyeInvertX", externalEyeInvertX},
         {"externalEyeInvertY", externalEyeInvertY},
+        {"externalEyeOffsetX", externalEyeOffsetX},
+        {"externalEyeOffsetY", externalEyeOffsetY},
+        {"externalEyeGainX", externalEyeGainX},
+        {"externalEyeGainY", externalEyeGainY},
         {"cloudUrl", cloudUrl},
         {"allowRemote", allowRemote},
         {"cloudUserName", cloudUserName},
@@ -125,6 +129,10 @@ void Settings::FromJson(const json& j) {
     get("externalEyeOscPort", externalEyeOscPort);
     get("externalEyeInvertX", externalEyeInvertX);
     get("externalEyeInvertY", externalEyeInvertY);
+    get("externalEyeOffsetX", externalEyeOffsetX);
+    get("externalEyeOffsetY", externalEyeOffsetY);
+    get("externalEyeGainX", externalEyeGainX);
+    get("externalEyeGainY", externalEyeGainY);
     get("cloudUrl", cloudUrl);
     get("allowRemote", allowRemote);
     get("cloudRefreshTokenProtected", cloudRefreshTokenProtected);
@@ -170,6 +178,10 @@ void Settings::FromJson(const json& j) {
     desktopBitrateMbps = std::clamp(desktopBitrateMbps, 5, 200);
     fecPercent = std::clamp(fecPercent, 0, 25);
     externalEyeOscPort = std::clamp(externalEyeOscPort, 1024, 65535);
+    externalEyeOffsetX = std::clamp(externalEyeOffsetX, -20.0f, 20.0f);
+    externalEyeOffsetY = std::clamp(externalEyeOffsetY, -20.0f, 20.0f);
+    externalEyeGainX = std::clamp(externalEyeGainX, 0.2f, 3.0f);
+    externalEyeGainY = std::clamp(externalEyeGainY, 0.2f, 3.0f);
     if (externalEyeTracking && foveatedEncoding) foveatedEncoding = false;
     streamProfile = std::clamp(streamProfile, 0, 2);
     // 0 = follow the profile; otherwise clamp to the supported range.

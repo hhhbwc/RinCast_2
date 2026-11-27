@@ -23,6 +23,7 @@ json HeadsetSettings::ToJson() const {
             {"vrScaleOfPanel", vrScaleOfPanel},
             {"matchSteamVr", matchSteamVr},
             {"gazeFoveation", gazeFoveation},
+            {"foveaDebug", foveaDebug},
             {"autoConnect", autoConnect},
             {"autoLaunchSteamVr", autoLaunchSteamVr},
             {"usbCable", usbCable},
@@ -100,6 +101,7 @@ void HeadsetSettings::FromJson(const json& j) {
     SetVrScale(vrScale);
     get("matchSteamVr", matchSteamVr);
     get("gazeFoveation", gazeFoveation);
+    get("foveaDebug", foveaDebug);
     get("autoConnect", autoConnect);
     get("autoLaunchSteamVr", autoLaunchSteamVr);
     get("usbCable", usbCable);
@@ -168,6 +170,7 @@ json HeadsetSettings::StreamSettingsJson() const {
             {"vrScale", vrScale},
             {"matchSteamVr", matchSteamVr},
             {"gazeFoveation", gazeFoveation},
+            {"foveaDebug", foveaDebug},
             {"autoConnect", autoConnect},
             {"frameGeneration", frameGeneration},
             {"refreshRate", refreshRate},
